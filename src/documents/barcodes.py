@@ -42,11 +42,23 @@ class Barcode:
     @property
     def is_asn(self) -> bool:
         """
-        Returns True if the barcode value matches the configured ASN prefix,
+        Returns True if the barcode value matches the configured ASN prefix, and the
+        extracted number is below 1000
         False otherwise
         """
-        return self.value.startswith(settings.CONSUMER_ASN_BARCODE_PREFIX)
 
+        if not self.value.startswith(settings.CONSUMER_ASN_BARCODE_PREFIX):
+            return False
+
+        asn_text = self.value
+        asn_text = asn_text[len(settings.CONSUMER_ASN_BARCODE_PREFIX) :].strip()
+
+        # now, try parsing the ASN number
+        try:
+            asn = int(asn_text)
+            return 0 < asn <= 1000
+        except ValueError:
+            return False
 
 class BarcodeReader:
     def __init__(self, filepath: Path, mime_type: str) -> None:
