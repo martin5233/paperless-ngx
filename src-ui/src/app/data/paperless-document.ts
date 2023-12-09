@@ -5,6 +5,7 @@ import { Observable } from 'rxjs'
 import { PaperlessStoragePath } from './paperless-storage-path'
 import { ObjectWithPermissions } from './object-with-permissions'
 import { PaperlessDocumentNote } from './paperless-document-note'
+import { PaperlessCustomFieldInstance } from './paperless-custom-field-instance'
 
 export interface SearchHit {
   score?: number
@@ -49,6 +50,8 @@ export interface PaperlessDocument extends ObjectWithPermissions {
 
   original_file_name?: string
 
+  archived_file_name?: string
+
   download_url?: string
 
   thumbnail_url?: string
@@ -58,4 +61,6 @@ export interface PaperlessDocument extends ObjectWithPermissions {
   notes?: PaperlessDocumentNote[]
 
   __search_hit__?: SearchHit
+
+  custom_fields?: PaperlessCustomFieldInstance[]
 }

@@ -19,7 +19,6 @@ import {
   NgbDateStruct,
 } from '@ng-bootstrap/ng-bootstrap'
 import { NgSelectModule } from '@ng-select/ng-select'
-import { PdfViewerComponent } from 'ng2-pdf-viewer'
 import { of, throwError } from 'rxjs'
 import { routes } from 'src/app/app-routing.module'
 import {
@@ -66,6 +65,11 @@ import { TextComponent } from '../common/input/text/text.component'
 import { PageHeaderComponent } from '../common/page-header/page-header.component'
 import { DocumentNotesComponent } from '../document-notes/document-notes.component'
 import { DocumentDetailComponent } from './document-detail.component'
+import { ShareLinksDropdownComponent } from '../common/share-links-dropdown/share-links-dropdown.component'
+import { CustomFieldsDropdownComponent } from '../common/custom-fields-dropdown/custom-fields-dropdown.component'
+import { PaperlessCustomFieldDataType } from 'src/app/data/paperless-custom-field'
+import { CustomFieldsService } from 'src/app/services/rest/custom-fields.service'
+import { PdfViewerComponent } from '../common/pdf-viewer/pdf-viewer.component'
 
 const doc: PaperlessDocument = {
   id: 3,
@@ -93,7 +97,30 @@ const doc: PaperlessDocument = {
       user: 2,
     },
   ],
+  custom_fields: [
+    {
+      field: 0,
+      document: 3,
+      created: new Date(),
+      value: 'custom foo bar',
+    },
+  ],
 }
+
+const customFields = [
+  {
+    id: 0,
+    name: 'Field 1',
+    data_type: PaperlessCustomFieldDataType.String,
+    created: new Date(),
+  },
+  {
+    id: 1,
+    name: 'Custom Field 2',
+    data_type: PaperlessCustomFieldDataType.Integer,
+    created: new Date(),
+  },
+]
 
 describe('DocumentDetailComponent', () => {
   let component: DocumentDetailComponent
@@ -106,6 +133,7 @@ describe('DocumentDetailComponent', () => {
   let toastService: ToastService
   let documentListViewService: DocumentListViewService
   let settingsService: SettingsService
+  let customFieldsService: CustomFieldsService
 
   let currentUserCan = true
   let currentUserHasObjectPermissions = true
@@ -132,8 +160,10 @@ describe('DocumentDetailComponent', () => {
         PermissionsFormComponent,
         SafeHtmlPipe,
         ConfirmDialogComponent,
-        PdfViewerComponent,
         SafeUrlPipe,
+        ShareLinksDropdownComponent,
+        CustomFieldsDropdownComponent,
+        PdfViewerComponent,
       ],
       providers: [
         DocumentTitlePipe,
@@ -197,6 +227,7 @@ describe('DocumentDetailComponent', () => {
               }),
           },
         },
+        CustomFieldsService,
         {
           provide: PermissionsService,
           useValue: {
@@ -232,6 +263,8 @@ describe('DocumentDetailComponent', () => {
     toastService = TestBed.inject(ToastService)
     documentListViewService = TestBed.inject(DocumentListViewService)
     settingsService = TestBed.inject(SettingsService)
+    settingsService.currentUser = { id: 1 }
+    customFieldsService = TestBed.inject(CustomFieldsService)
     fixture = TestBed.createComponent(DocumentDetailComponent)
     component = fixture.componentInstance
   })
@@ -288,6 +321,13 @@ describe('DocumentDetailComponent', () => {
   it('should load already-opened document via param', () => {
     jest.spyOn(documentService, 'get').mockReturnValueOnce(of(doc))
     jest.spyOn(openDocumentsService, 'getOpenDocument').mockReturnValue(doc)
+    jest.spyOn(customFieldsService, 'listAll').mockReturnValue(
+      of({
+        count: customFields.length,
+        all: customFields.map((f) => f.id),
+        results: customFields,
+      })
+    )
     fixture.detectChanges() // calls ngOnInit
     expect(component.document).toEqual(doc)
   })
@@ -398,15 +438,12 @@ describe('DocumentDetailComponent', () => {
     const closeSpy = jest.spyOn(component, 'close')
     const updateSpy = jest.spyOn(documentService, 'update')
     const toastSpy = jest.spyOn(toastService, 'showError')
-    updateSpy.mockImplementation(() =>
-      throwError(() => new Error('failed to save'))
-    )
+    const error = new Error('failed to save')
+    updateSpy.mockImplementation(() => throwError(() => error))
     component.save()
     expect(updateSpy).toHaveBeenCalled()
     expect(closeSpy).not.toHaveBeenCalled()
-    expect(toastSpy).toHaveBeenCalledWith(
-      'Error saving document: failed to save'
-    )
+    expect(toastSpy).toHaveBeenCalledWith('Error saving document', error)
   })
 
   it('should show error toast on save but close if user can no longer edit', () => {
@@ -450,15 +487,12 @@ describe('DocumentDetailComponent', () => {
     const closeSpy = jest.spyOn(component, 'close')
     const updateSpy = jest.spyOn(documentService, 'update')
     const toastSpy = jest.spyOn(toastService, 'showError')
-    updateSpy.mockImplementation(() =>
-      throwError(() => new Error('failed to save'))
-    )
+    const error = new Error('failed to save')
+    updateSpy.mockImplementation(() => throwError(() => error))
     component.saveEditNext()
     expect(updateSpy).toHaveBeenCalled()
     expect(closeSpy).not.toHaveBeenCalled()
-    expect(toastSpy).toHaveBeenCalledWith(
-      'Error saving document: failed to save'
-    )
+    expect(toastSpy).toHaveBeenCalledWith('Error saving document', error)
   })
 
   it('should show save button and save & close or save & next', () => {
@@ -649,6 +683,35 @@ describe('DocumentDetailComponent', () => {
     expect(component.previewNumPages).toEqual(1000)
   })
 
+  it('should support zoom controls', () => {
+    initNormally()
+    component.onZoomSelect({ target: { value: '1' } } as any) // from select
+    expect(component.previewZoomSetting).toEqual('1')
+    component.increaseZoom()
+    expect(component.previewZoomSetting).toEqual('1.5')
+    component.increaseZoom()
+    expect(component.previewZoomSetting).toEqual('2')
+    component.decreaseZoom()
+    expect(component.previewZoomSetting).toEqual('1.5')
+    component.onZoomSelect({ target: { value: '1' } } as any) // from select
+    component.decreaseZoom()
+    expect(component.previewZoomSetting).toEqual('.75')
+
+    component.onZoomSelect({ target: { value: 'page-fit' } } as any) // from select
+    expect(component.previewZoomScale).toEqual('page-fit')
+    expect(component.previewZoomSetting).toEqual('1')
+    component.increaseZoom()
+    expect(component.previewZoomSetting).toEqual('1.5')
+    expect(component.previewZoomScale).toEqual('page-width')
+
+    component.onZoomSelect({ target: { value: 'page-fit' } } as any) // from select
+    expect(component.previewZoomScale).toEqual('page-fit')
+    expect(component.previewZoomSetting).toEqual('1')
+    component.decreaseZoom()
+    expect(component.previewZoomSetting).toEqual('.5')
+    expect(component.previewZoomScale).toEqual('page-width')
+  })
+
   it('should support updating notes dynamically', () => {
     const notes = [
       {
@@ -772,7 +835,7 @@ describe('DocumentDetailComponent', () => {
     jest.spyOn(settingsService, 'get').mockReturnValue(false)
     expect(component.useNativePdfViewer).toBeFalsy()
     fixture.detectChanges()
-    expect(fixture.debugElement.query(By.css('pdf-viewer'))).not.toBeNull()
+    expect(fixture.debugElement.query(By.css('pngx-pdf-viewer'))).not.toBeNull()
   })
 
   it('should display native pdf viewer if enabled', () => {
@@ -798,19 +861,95 @@ describe('DocumentDetailComponent', () => {
       .mockReturnValue(throwError(() => error))
     const toastSpy = jest.spyOn(toastService, 'showError')
     initNormally()
-    expect(toastSpy).toHaveBeenCalledWith(
-      'Error retrieving metadata',
-      10000,
-      error
+    expect(toastSpy).toHaveBeenCalledWith('Error retrieving metadata', error)
+  })
+
+  it('should display custom fields', () => {
+    initNormally()
+    expect(fixture.debugElement.nativeElement.textContent).toContain(
+      customFields[0].name
     )
   })
 
+  it('should support add custom field, correctly send via post', () => {
+    initNormally()
+    const initialLength = doc.custom_fields.length
+    expect(component.customFieldFormFields).toHaveLength(initialLength)
+    component.addField(customFields[1])
+    fixture.detectChanges()
+    expect(component.document.custom_fields).toHaveLength(initialLength + 1)
+    expect(component.customFieldFormFields).toHaveLength(initialLength + 1)
+    expect(fixture.debugElement.nativeElement.textContent).toContain(
+      customFields[1].name
+    )
+    const updateSpy = jest.spyOn(documentService, 'update')
+    component.save(true)
+    expect(updateSpy.mock.lastCall[0].custom_fields).toHaveLength(2)
+    expect(updateSpy.mock.lastCall[0].custom_fields[1]).toEqual({
+      field: customFields[1].id,
+      value: null,
+    })
+  })
+
+  it('should support remove custom field, correctly send via post', () => {
+    initNormally()
+    const initialLength = doc.custom_fields.length
+    expect(component.customFieldFormFields).toHaveLength(initialLength)
+    component.removeField(doc.custom_fields[0])
+    fixture.detectChanges()
+    expect(component.document.custom_fields).toHaveLength(initialLength - 1)
+    expect(component.customFieldFormFields).toHaveLength(initialLength - 1)
+    expect(fixture.debugElement.nativeElement.textContent).not.toContain(
+      'Field 1'
+    )
+    const updateSpy = jest.spyOn(documentService, 'update')
+    component.save(true)
+    expect(updateSpy.mock.lastCall[0].custom_fields).toHaveLength(
+      initialLength - 1
+    )
+  })
+
+  it('should show custom field errors', () => {
+    initNormally()
+    component.error = {
+      custom_fields: [
+        {},
+        {},
+        { value: ['This field may not be null.'] },
+        {},
+        { non_field_errors: ['Enter a valid URL.'] },
+      ],
+    }
+    expect(component.getCustomFieldError(2)).toEqual([
+      'This field may not be null.',
+    ])
+    expect(component.getCustomFieldError(4)).toEqual(['Enter a valid URL.'])
+  })
+
+  it('should refresh custom fields when created', () => {
+    initNormally()
+    const refreshSpy = jest.spyOn(component, 'refreshCustomFields')
+    fixture.debugElement
+      .query(By.directive(CustomFieldsDropdownComponent))
+      .triggerEventHandler('created')
+    expect(refreshSpy).toHaveBeenCalled()
+  })
+
   function initNormally() {
-    jest.spyOn(documentService, 'get').mockReturnValueOnce(of(doc))
+    jest
+      .spyOn(documentService, 'get')
+      .mockReturnValueOnce(of(Object.assign({}, doc)))
     jest.spyOn(openDocumentsService, 'getOpenDocument').mockReturnValue(null)
     jest
       .spyOn(openDocumentsService, 'openDocument')
       .mockReturnValueOnce(of(true))
+    jest.spyOn(customFieldsService, 'listAll').mockReturnValue(
+      of({
+        count: customFields.length,
+        all: customFields.map((f) => f.id),
+        results: customFields,
+      })
+    )
     fixture.detectChanges()
   }
 })

@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy, ViewChild } from '@angular/core'
-import { FormControl, FormGroup } from '@angular/forms'
+import { FormArray, FormControl, FormGroup } from '@angular/forms'
 import { ActivatedRoute, Router } from '@angular/router'
 import {
   NgbDateStruct,
@@ -21,7 +21,6 @@ import { DocumentService } from 'src/app/services/rest/document.service'
 import { ConfirmDialogComponent } from '../common/confirm-dialog/confirm-dialog.component'
 import { CorrespondentEditDialogComponent } from '../common/edit-dialog/correspondent-edit-dialog/correspondent-edit-dialog.component'
 import { DocumentTypeEditDialogComponent } from '../common/edit-dialog/document-type-edit-dialog/document-type-edit-dialog.component'
-import { PDFDocumentProxy } from 'ng2-pdf-viewer'
 import { ToastService } from 'src/app/services/toast.service'
 import { TextComponent } from '../common/input/text/text.component'
 import { SettingsService } from 'src/app/services/settings.service'
@@ -63,6 +62,13 @@ import { EditDialogMode } from '../common/edit-dialog/edit-dialog.component'
 import { ObjectWithId } from 'src/app/data/object-with-id'
 import { FilterRule } from 'src/app/data/filter-rule'
 import { ISODateAdapter } from 'src/app/utils/ngb-iso-date-adapter'
+import {
+  PaperlessCustomField,
+  PaperlessCustomFieldDataType,
+} from 'src/app/data/paperless-custom-field'
+import { PaperlessCustomFieldInstance } from 'src/app/data/paperless-custom-field-instance'
+import { CustomFieldsService } from 'src/app/services/rest/custom-fields.service'
+import { PDFDocumentProxy } from '../common/pdf-viewer/typings'
 
 enum DocumentDetailNavIDs {
   Details = 1,
@@ -73,8 +79,20 @@ enum DocumentDetailNavIDs {
   Permissions = 6,
 }
 
+enum ZoomSetting {
+  PageFit = 'page-fit',
+  PageWidth = 'page-width',
+  Quarter = '.25',
+  Half = '.5',
+  ThreeQuarters = '.75',
+  One = '1',
+  OneAndHalf = '1.5',
+  Two = '2',
+  Three = '3',
+}
+
 @Component({
-  selector: 'app-document-detail',
+  selector: 'pngx-document-detail',
   templateUrl: './document-detail.component.html',
   styleUrls: ['./document-detail.component.scss'],
 })
@@ -119,10 +137,13 @@ export class DocumentDetailComponent
     archive_serial_number: new FormControl(),
     tags: new FormControl([]),
     permissions_form: new FormControl(null),
+    custom_fields: new FormArray([]),
   })
 
   previewCurrentPage: number = 1
   previewNumPages: number = 1
+  previewZoomSetting: ZoomSetting = ZoomSetting.One
+  previewZoomScale: ZoomSetting = ZoomSetting.PageWidth
 
   store: BehaviorSubject<any>
   isDirty$: Observable<boolean>
@@ -133,6 +154,9 @@ export class DocumentDetailComponent
   password: string
 
   ogDate: Date
+
+  customFields: PaperlessCustomField[]
+  public readonly PaperlessCustomFieldDataType = PaperlessCustomFieldDataType
 
   @ViewChild('nav') nav: NgbNav
   @ViewChild('pdfPreview') set pdfPreview(element) {
@@ -165,6 +189,7 @@ export class DocumentDetailComponent
     private storagePathService: StoragePathService,
     private permissionsService: PermissionsService,
     private userService: UserService,
+    private customFieldsService: CustomFieldsService,
     private http: HttpClient
   ) {
     super()
@@ -230,6 +255,8 @@ export class DocumentDetailComponent
       .listAll()
       .pipe(first(), takeUntil(this.unsubscribeNotifier))
       .subscribe((result) => (this.users = result.results))
+
+    this.getCustomFields()
 
     this.route.paramMap
       .pipe(
@@ -323,6 +350,7 @@ export class DocumentDetailComponent
               owner: doc.owner,
               set_permissions: doc.permissions,
             },
+            custom_fields: doc.custom_fields,
           })
 
           this.isDirty$ = dirtyCheck(
@@ -384,6 +412,8 @@ export class DocumentDetailComponent
   updateComponent(doc: PaperlessDocument) {
     this.document = doc
     this.requiresPassword = false
+    // this.customFields = doc.custom_fields.concat([])
+    this.updateFormForCustomFields()
     this.documentsService
       .getMetadata(doc.id)
       .pipe(first())
@@ -395,7 +425,6 @@ export class DocumentDetailComponent
           this.metadata = null
           this.toastService.showError(
             $localize`Error retrieving metadata`,
-            10000,
             error
           )
         },
@@ -417,7 +446,6 @@ export class DocumentDetailComponent
             this.suggestions = null
             this.toastService.showError(
               $localize`Error retrieving suggestions.`,
-              10000,
               error
             )
           },
@@ -432,6 +460,10 @@ export class DocumentDetailComponent
 
     this.documentForm.patchValue(docFormValues, { emitEvent: false })
     if (!this.userCanEdit) this.documentForm.disable()
+  }
+
+  get customFieldFormFields(): FormArray {
+    return this.documentForm.get('custom_fields') as FormArray
   }
 
   createDocumentType(newName: string) {
@@ -511,6 +543,7 @@ export class DocumentDetailComponent
             set_permissions: doc.permissions,
           }
           this.title = doc.title
+          this.updateFormForCustomFields()
           this.documentForm.patchValue(doc)
           this.openDocumentService.setDirty(doc, false)
         },
@@ -534,6 +567,7 @@ export class DocumentDetailComponent
           close && this.close()
           this.networkActive = false
           this.error = null
+          this.openDocumentService.refreshDocument(this.documentId)
         },
         error: (error) => {
           this.networkActive = false
@@ -542,11 +576,7 @@ export class DocumentDetailComponent
             close && this.close()
           } else {
             this.error = error.error
-            this.toastService.showError(
-              $localize`Error saving document` +
-                ': ' +
-                (error.error?.detail ?? error.message ?? JSON.stringify(error))
-            )
+            this.toastService.showError($localize`Error saving document`, error)
           }
         },
       })
@@ -587,11 +617,7 @@ export class DocumentDetailComponent
         error: (error) => {
           this.networkActive = false
           this.error = error.error
-          this.toastService.showError(
-            $localize`Error saving document` +
-              ': ' +
-              (error.error?.detail ?? error.message ?? JSON.stringify(error))
-          )
+          this.toastService.showError($localize`Error saving document`, error)
         },
       })
   }
@@ -640,11 +666,7 @@ export class DocumentDetailComponent
           this.close()
         },
         error: (error) => {
-          this.toastService.showError(
-            $localize`Error deleting document: ${
-              error.error?.detail ?? error.message ?? JSON.stringify(error)
-            }`
-          )
+          this.toastService.showError($localize`Error deleting document`, error)
           modal.componentInstance.buttonsEnabled = true
           this.subscribeModalDelete(modal)
         },
@@ -687,9 +709,8 @@ export class DocumentDetailComponent
               modal.componentInstance.buttonsEnabled = true
             }
             this.toastService.showError(
-              $localize`Error executing operation: ${JSON.stringify(
-                error.error
-              )}`
+              $localize`Error executing operation`,
+              error
             )
           },
         })
@@ -735,6 +756,54 @@ export class DocumentDetailComponent
     if ('Enter' == event.key) {
       this.password = (event.target as HTMLInputElement).value
     }
+  }
+
+  onZoomSelect(event: Event) {
+    const setting = (event.target as HTMLSelectElement)?.value as ZoomSetting
+    if (ZoomSetting.PageFit === setting) {
+      this.previewZoomSetting = ZoomSetting.One
+      this.previewZoomScale = setting
+    } else {
+      this.previewZoomScale = ZoomSetting.PageWidth
+      this.previewZoomSetting = setting
+    }
+  }
+
+  get zoomSettings() {
+    return Object.values(ZoomSetting).filter(
+      (setting) => setting !== ZoomSetting.PageWidth
+    )
+  }
+
+  getZoomSettingTitle(setting: ZoomSetting): string {
+    switch (setting) {
+      case ZoomSetting.PageFit:
+        return $localize`Page Fit`
+      default:
+        return `${parseFloat(setting) * 100}%`
+    }
+  }
+
+  increaseZoom(): void {
+    let currentIndex = Object.values(ZoomSetting).indexOf(
+      this.previewZoomSetting
+    )
+    if (this.previewZoomScale === ZoomSetting.PageFit) currentIndex = 5
+    this.previewZoomScale = ZoomSetting.PageWidth
+    this.previewZoomSetting =
+      Object.values(ZoomSetting)[
+        Math.min(Object.values(ZoomSetting).length - 1, currentIndex + 1)
+      ]
+  }
+
+  decreaseZoom(): void {
+    let currentIndex = Object.values(ZoomSetting).indexOf(
+      this.previewZoomSetting
+    )
+    if (this.previewZoomScale === ZoomSetting.PageFit) currentIndex = 4
+    this.previewZoomScale = ZoomSetting.PageWidth
+    this.previewZoomSetting =
+      Object.values(ZoomSetting)[Math.max(2, currentIndex - 1)]
   }
 
   get showPermissions(): boolean {
@@ -832,5 +901,62 @@ export class DocumentDetailComponent
     })
 
     this.documentListViewService.quickFilter(filterRules)
+  }
+
+  private getCustomFields() {
+    this.customFieldsService
+      .listAll()
+      .pipe(first(), takeUntil(this.unsubscribeNotifier))
+      .subscribe((result) => (this.customFields = result.results))
+  }
+
+  public refreshCustomFields() {
+    this.customFieldsService.clearCache()
+    this.getCustomFields()
+  }
+
+  public getCustomFieldFromInstance(
+    instance: PaperlessCustomFieldInstance
+  ): PaperlessCustomField {
+    return this.customFields?.find((f) => f.id === instance.field)
+  }
+
+  public getCustomFieldError(index: number) {
+    const fieldError = this.error?.custom_fields?.[index]
+    return fieldError?.['non_field_errors'] ?? fieldError?.['value']
+  }
+
+  private updateFormForCustomFields(emitEvent: boolean = false) {
+    this.customFieldFormFields.clear({ emitEvent: false })
+    this.document.custom_fields?.forEach((fieldInstance) => {
+      this.customFieldFormFields.push(
+        new FormGroup({
+          field: new FormControl(
+            this.getCustomFieldFromInstance(fieldInstance)?.id
+          ),
+          value: new FormControl(fieldInstance.value),
+        }),
+        { emitEvent }
+      )
+    })
+  }
+
+  public addField(field: PaperlessCustomField) {
+    this.document.custom_fields.push({
+      field: field.id,
+      value: null,
+      document: this.documentId,
+      created: new Date(),
+    })
+    this.updateFormForCustomFields(true)
+  }
+
+  public removeField(fieldInstance: PaperlessCustomFieldInstance) {
+    this.document.custom_fields.splice(
+      this.document.custom_fields.indexOf(fieldInstance),
+      1
+    )
+    this.updateFormForCustomFields(true)
+    this.documentForm.updateValueAndValidity()
   }
 }

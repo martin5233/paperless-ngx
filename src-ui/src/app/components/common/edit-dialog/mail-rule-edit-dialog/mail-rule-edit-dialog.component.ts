@@ -79,6 +79,10 @@ const METADATA_TITLE_OPTIONS = [
     id: MailMetadataTitleOption.FromFilename,
     name: $localize`Use attachment filename as title`,
   },
+  {
+    id: MailMetadataTitleOption.None,
+    name: $localize`Do not assign title from this rule`,
+  },
 ]
 
 const METADATA_CORRESPONDENT_OPTIONS = [
@@ -101,7 +105,7 @@ const METADATA_CORRESPONDENT_OPTIONS = [
 ]
 
 @Component({
-  selector: 'app-mail-rule-edit-dialog',
+  selector: 'pngx-mail-rule-edit-dialog',
   templateUrl: './mail-rule-edit-dialog.component.html',
   styleUrls: ['./mail-rule-edit-dialog.component.scss'],
 })
@@ -154,7 +158,8 @@ export class MailRuleEditDialogComponent extends EditDialogComponent<PaperlessMa
       filter_to: new FormControl(null),
       filter_subject: new FormControl(null),
       filter_body: new FormControl(null),
-      filter_attachment_filename: new FormControl(null),
+      filter_attachment_filename_include: new FormControl(null),
+      filter_attachment_filename_exclude: new FormControl(null),
       maximum_age: new FormControl(null),
       attachment_type: new FormControl(MailFilterAttachmentType.Attachments),
       consumption_scope: new FormControl(MailRuleConsumptionScope.Attachments),
@@ -168,6 +173,7 @@ export class MailRuleEditDialogComponent extends EditDialogComponent<PaperlessMa
         MailMetadataCorrespondentOption.FromNothing
       ),
       assign_correspondent: new FormControl(null),
+      assign_owner_from_rule: new FormControl(true),
     })
   }
 

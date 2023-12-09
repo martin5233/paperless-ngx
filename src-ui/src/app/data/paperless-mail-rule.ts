@@ -22,6 +22,7 @@ export enum MailAction {
 export enum MailMetadataTitleOption {
   FromSubject = 1,
   FromFilename = 2,
+  None = 3,
 }
 
 export enum MailMetadataCorrespondentOption {
@@ -48,7 +49,9 @@ export interface PaperlessMailRule extends ObjectWithPermissions {
 
   filter_body: string
 
-  filter_attachment_filename: string
+  filter_attachment_filename_include: string
+
+  filter_attachment_filename_exclude: string
 
   maximum_age: number
 
@@ -67,4 +70,6 @@ export interface PaperlessMailRule extends ObjectWithPermissions {
   assign_correspondent_from?: MailMetadataCorrespondentOption
 
   assign_correspondent?: number // PaperlessCorrespondent.id
+
+  assign_owner_from_rule: boolean
 }
