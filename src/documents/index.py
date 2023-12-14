@@ -3,6 +3,7 @@ import math
 import os
 from collections import Counter
 from contextlib import contextmanager
+from typing import Optional
 
 from dateutil.parser import isoparse
 from django.conf import settings
@@ -25,9 +26,12 @@ from whoosh.index import open_dir
 from whoosh.qparser import MultifieldParser
 from whoosh.qparser import QueryParser
 from whoosh.qparser.dateparse import DateParserPlugin
+from whoosh.qparser.dateparse import English
+from whoosh.qparser.plugins import FieldsPlugin
 from whoosh.scoring import TF_IDF
 from whoosh.searching import ResultsPage
 from whoosh.searching import Searcher
+from whoosh.util.times import timespan
 from whoosh.writing import AsyncWriter
 
 # from documents.models import CustomMetadata
@@ -356,6 +360,22 @@ class DelayedQuery:
         return page
 
 
+class LocalDateParser(English):
+    def reverse_timezone_offset(self, d):
+        return (d.replace(tzinfo=timezone.get_current_timezone())).astimezone(
+            timezone.utc,
+        )
+
+    def date_from(self, *args, **kwargs):
+        d = super().date_from(*args, **kwargs)
+        if isinstance(d, timespan):
+            d.start = self.reverse_timezone_offset(d.start)
+            d.end = self.reverse_timezone_offset(d.end)
+        else:
+            d = self.reverse_timezone_offset(d)
+        return d
+
+
 class DelayedFullTextQuery(DelayedQuery):
     def _get_query(self):
         q_str = self.query_params["query"]
@@ -371,7 +391,12 @@ class DelayedFullTextQuery(DelayedQuery):
             ],
             self.searcher.ixreader.schema,
         )
-        qp.add_plugin(DateParserPlugin(basedate=timezone.now()))
+        qp.add_plugin(
+            DateParserPlugin(
+                basedate=timezone.now(),
+                dateparser=LocalDateParser(),
+            ),
+        )
         q = qp.parse(q_str)
 
         corrected = self.searcher.correct_query(q, q_str)
@@ -402,7 +427,12 @@ class DelayedMoreLikeThisQuery(DelayedQuery):
         return q, mask
 
 
-def autocomplete(ix: FileIndex, term: str, limit: int = 10, user: User = None):
+def autocomplete(
+    ix: FileIndex,
+    term: str,
+    limit: int = 10,
+    user: Optional[User] = None,
+):
     """
     Mimics whoosh.reading.IndexReader.most_distinctive_terms with permissions
     and without scoring
@@ -411,6 +441,9 @@ def autocomplete(ix: FileIndex, term: str, limit: int = 10, user: User = None):
 
     with ix.searcher(weighting=TF_IDF()) as s:
         qp = QueryParser("content", schema=ix.schema)
+        # Don't let searches with a query that happen to match a field override the
+        # content field query instead and return bogus, not text data
+        qp.remove_plugin_class(FieldsPlugin)
         q = qp.parse(f"{term.lower()}*")
         user_criterias = get_permissions_criterias(user)
 
@@ -430,7 +463,7 @@ def autocomplete(ix: FileIndex, term: str, limit: int = 10, user: User = None):
     return terms
 
 
-def get_permissions_criterias(user: User = None):
+def get_permissions_criterias(user: Optional[User] = None):
     user_criterias = [query.Term("has_owner", False)]
     if user is not None:
         if user.is_superuser:  # superusers see all docs
