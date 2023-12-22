@@ -1,0 +1,98 @@
+version: '3.9'
+
+networks:
+  paperless_frontend:
+    name: paperless_frontend
+    driver: bridge
+  paperless_backend:
+    name: paperless_backend
+    driver: bridge
+secrets:
+  paperless_db_paperless_passwd:
+    file: /opt/paperless/secrets/paperless_db_paperless_passwd
+  paperless_secret_key:
+    file: /opt/paperless/secrets/paperless_secret_key
+services:
+   paperless:
+      container_name: paperless
+#      image: ghcr.io/paperless-ngx/paperless-ngx:latest
+      build: .
+      restart: unless-stopped
+      networks:
+        - paperless_frontend
+        - paperless_backend
+      ports:
+        - 8000:8000
+      security_opt:
+        - no-new-privileges:true
+      depends_on:
+        - paperless-redis
+        - paperless-postgres
+      volumes:
+        - /opt/paperless/paperless/data:/usr/src/paperless/data # Docker container data
+        - /opt/paperless/paperless/media:/usr/src/paperless/media # Location of your documents
+        - /opt/paperless/paperless/export:/usr/src/paperless/export # Target for backups
+        - /opt/paperless/paperless/consume:/usr/src/paperless/consume # Target for backups
+      environment:
+        USERMAP_UID: 1002
+        USERMAP_GID: 1002
+        PAPERLESS_TIME_ZONE: Europe/Berlin
+        PAPERLESS_OCR_LANGUAGE: deu
+        PAPERLESS_ENABLE_UPDATE_CHECK: "true"
+        PAPERLESS_REDIS: redis://paperless-redis:6379
+        PAPERLESS_DBHOST: paperless-postgres
+        PAPERLESS_DBNAME: paperless
+        PAPERLESS_DBUSER: paperless_user
+        PAPERLESS_DBPASS_FILE: /run/secrets/paperless_db_paperless_passwd
+        #PAPERLESS_DBPASS: $PAPERLESS_DBPASS
+        PAPERLESS_SECRET_KEY_FILE: /run/secrets/paperless_secret_key
+        #PAPERLESS_SECRET_KEY: $PAPERLESS_SECRET_KEY
+        PAPERLESS_FILENAME_FORMAT: "{created_year}/{correspondent}/{created} {title}"
+        PAPERLESS_URL: http://cube:8000
+        PAPERLESS_ALLOWED_HOSTS: "*"
+        PAPERLESS_OCR_USER_ARGS: '{"continue_on_soft_render_error": true}'
+        PAPERLESS_EMAIL_TASK_CRON: '12 * * * *'
+        PAPERLESS_CONSUMER_ENABLE_BARCODES: true
+        PAPERLESS_CONSUMER_ENABLE_ASN_BARCODE: true
+        PAPERLESS_CONSUMER_ASN_BARCODE_PREFIX: ""
+        PAPERLESS_CONSUMER_ENABLE_COLLATE_DOUBLE_SIDED: true
+        PAPERLESS_CONSUMER_RECURSIVE: true
+        PAPERLESS_CONVERT_MEMORY_LIMIT: 1024
+        PAPERLESS_OCR_PAGES: 10
+      secrets:
+        - paperless_db_paperless_passwd
+        - paperless_secret_key
+      deploy:
+        resources:
+          limits:
+            memory: '6G'
+
+   paperless-postgres:
+      container_name: paperless-postgres
+      image: postgres:16.0-alpine #fixedVersion
+      restart: unless-stopped
+      networks:
+        - paperless_backend
+      security_opt:
+        - no-new-privileges:true
+      volumes:
+        - /opt/paperless/postgres:/var/lib/postgresql/data
+      environment:
+        POSTGRES_USER: paperless_user
+        POSTGRES_DB: paperless
+        POSTGRES_PASSWORD_FILE: /run/secrets/paperless_db_paperless_passwd
+        #POSTGRES_PASSWORD: $PasswordFromEnvFile
+      secrets:
+        - paperless_db_paperless_passwd
+   paperless-redis:
+      container_name: paperless-redis
+      image: redis:7.2-alpine #fixedVersion
+      restart: unless-stopped
+      networks:
+        - paperless_backend
+      security_opt:
+        - no-new-privileges:true
+      volumes:
+        - /opt/paperless/redis:/data
+      environment:
+        REDIS_ARGS: "--save 60 10"
