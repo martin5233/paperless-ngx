@@ -555,6 +555,11 @@ table.table {
   }
 }
 
+.popover-hidden .popover {
+    opacity: 0;
+    pointer-events: none;
+}
+
 // Tour
 .tour-active .popover {
   min-width: 360px;
@@ -642,8 +647,6 @@ code {
 }
 
 .accordion {
-  --bs-accordion-btn-padding-x: 0.75rem;
-  --bs-accordion-btn-padding-y: 0.375rem;
   --bs-accordion-btn-bg: var(--bs-light);
   --bs-accordion-btn-color: var(--bs-primary);
   --bs-accordion-color: var(--bs-body-color);

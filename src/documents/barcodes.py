@@ -102,6 +102,9 @@ class BarcodeReader:
         """
         asn = None
 
+        if not self.supported_mime_type:
+            return None
+
         # Ensure the barcodes have been read
         self.detect()
 
@@ -117,7 +120,7 @@ class BarcodeReader:
             asn_text = asn_text[len(settings.CONSUMER_ASN_BARCODE_PREFIX) :].strip()
 
             # remove non-numeric parts of the remaining string
-            asn_text = re.sub("[^0-9]", "", asn_text)
+            asn_text = re.sub(r"\D", "", asn_text)
 
             # now, try parsing the ASN number
             try:
@@ -227,7 +230,7 @@ class BarcodeReader:
         # This file is really borked, allow the consumption to continue
         # but it may fail further on
         except Exception as e:  # pragma: no cover
-            logger.warning(
+            logger.exception(
                 f"Exception during barcode scanning: {e}",
             )
 

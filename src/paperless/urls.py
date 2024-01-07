@@ -6,6 +6,7 @@ from django.urls import path
 from django.urls import re_path
 from django.utils.translation import gettext_lazy as _
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import RedirectView
 from rest_framework.authtoken import views
 from rest_framework.routers import DefaultRouter
@@ -14,7 +15,6 @@ from documents.views import AcknowledgeTasksView
 from documents.views import BulkDownloadView
 from documents.views import BulkEditObjectPermissionsView
 from documents.views import BulkEditView
-from documents.views import ConsumptionTemplateViewSet
 from documents.views import CorrespondentViewSet
 from documents.views import CustomFieldViewSet
 from documents.views import DocumentTypeViewSet
@@ -33,7 +33,11 @@ from documents.views import TagViewSet
 from documents.views import TasksViewSet
 from documents.views import UiSettingsView
 from documents.views import UnifiedSearchViewSet
+from documents.views import WorkflowActionViewSet
+from documents.views import WorkflowTriggerViewSet
+from documents.views import WorkflowViewSet
 from paperless.consumers import StatusConsumer
+from paperless.views import ApplicationConfigurationViewSet
 from paperless.views import FaviconView
 from paperless.views import GenerateAuthTokenView
 from paperless.views import GroupViewSet
@@ -57,8 +61,11 @@ api_router.register(r"groups", GroupViewSet, basename="groups")
 api_router.register(r"mail_accounts", MailAccountViewSet)
 api_router.register(r"mail_rules", MailRuleViewSet)
 api_router.register(r"share_links", ShareLinkViewSet)
-api_router.register(r"consumption_templates", ConsumptionTemplateViewSet)
+api_router.register(r"workflow_triggers", WorkflowTriggerViewSet)
+api_router.register(r"workflow_actions", WorkflowActionViewSet)
+api_router.register(r"workflows", WorkflowViewSet)
 api_router.register(r"custom_fields", CustomFieldViewSet)
+api_router.register(r"config", ApplicationConfigurationViewSet)
 
 
 urlpatterns = [
@@ -178,7 +185,11 @@ urlpatterns = [
     # login, logout
     path("accounts/", include("django.contrib.auth.urls")),
     # Root of the Frontend
-    re_path(r".*", login_required(IndexView.as_view()), name="base"),
+    re_path(
+        r".*",
+        login_required(ensure_csrf_cookie(IndexView.as_view())),
+        name="base",
+    ),
 ]
 
 

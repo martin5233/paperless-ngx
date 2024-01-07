@@ -4,11 +4,12 @@ import os
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
+from datetime import timezone
 from typing import Optional
 
 from dateutil.parser import isoparse
 from django.conf import settings
-from django.utils import timezone
+from django.utils import timezone as django_timezone
 from guardian.shortcuts import get_users_with_perms
 from whoosh import classify
 from whoosh import highlight
@@ -75,6 +76,7 @@ def get_schema():
         viewer_id=KEYWORD(commas=True),
         checksum=TEXT(),
         original_filename=TEXT(sortable=True),
+        is_shared=BOOLEAN(),
     )
 
 
@@ -167,6 +169,7 @@ def update_document(writer: AsyncWriter, doc: Document):
         viewer_id=viewer_ids if viewer_ids else None,
         checksum=doc.checksum,
         original_filename=doc.original_filename,
+        is_shared=len(viewer_ids) > 0,
     )
 
 
@@ -194,6 +197,7 @@ class DelayedQuery:
         "document_type": ("type", ["id", "id__in", "id__none", "isnull"]),
         "storage_path": ("path", ["id", "id__in", "id__none", "isnull"]),
         "owner": ("owner", ["id", "id__in", "id__none", "isnull"]),
+        "shared_by": ("shared_by", ["id"]),
         "tags": ("tag", ["id__all", "id__in", "id__none"]),
         "added": ("added", ["date__lt", "date__gt"]),
         "created": ("created", ["date__lt", "date__gt"]),
@@ -233,7 +237,11 @@ class DelayedQuery:
                 continue
 
             if query_filter == "id":
-                criterias.append(query.Term(f"{field}_id", value))
+                if param == "shared_by":
+                    criterias.append(query.Term("is_shared", True))
+                    criterias.append(query.Term("owner_id", value))
+                else:
+                    criterias.append(query.Term(f"{field}_id", value))
             elif query_filter == "id__in":
                 in_filter = []
                 for object_id in value.split(","):
@@ -363,7 +371,7 @@ class DelayedQuery:
 
 class LocalDateParser(English):
     def reverse_timezone_offset(self, d):
-        return (d.replace(tzinfo=timezone.get_current_timezone())).astimezone(
+        return (d.replace(tzinfo=django_timezone.get_current_timezone())).astimezone(
             timezone.utc,
         )
 
@@ -394,7 +402,7 @@ class DelayedFullTextQuery(DelayedQuery):
         )
         qp.add_plugin(
             DateParserPlugin(
-                basedate=timezone.now(),
+                basedate=django_timezone.now(),
                 dateparser=LocalDateParser(),
             ),
         )
