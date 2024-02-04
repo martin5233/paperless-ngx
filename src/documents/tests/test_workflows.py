@@ -4,7 +4,11 @@ from unittest import mock
 
 from django.contrib.auth.models import Group
 from django.contrib.auth.models import User
+from django.db.models import QuerySet
 from django.utils import timezone
+from guardian.shortcuts import assign_perm
+from guardian.shortcuts import get_groups_with_perms
+from guardian.shortcuts import get_users_with_perms
 from rest_framework.test import APITestCase
 
 from documents import tasks
@@ -13,6 +17,7 @@ from documents.data_models import DocumentSource
 from documents.matching import document_matches_workflow
 from documents.models import Correspondent
 from documents.models import CustomField
+from documents.models import CustomFieldInstance
 from documents.models import Document
 from documents.models import DocumentType
 from documents.models import MatchingModel
@@ -23,6 +28,7 @@ from documents.models import WorkflowAction
 from documents.models import WorkflowTrigger
 from documents.signals import document_consumption_finished
 from documents.tests.utils import DirectoriesMixin
+from documents.tests.utils import DummyProgressManager
 from documents.tests.utils import FileSystemAssertsMixin
 from paperless_mail.models import MailAccount
 from paperless_mail.models import MailRule
@@ -48,6 +54,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
         self.user2 = User.objects.create(username="user2")
         self.user3 = User.objects.create(username="user3")
         self.group1 = Group.objects.create(name="group1")
+        self.group2 = Group.objects.create(name="group2")
 
         account1 = MailAccount.objects.create(
             name="Email1",
@@ -125,7 +132,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
 
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="INFO") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -202,7 +209,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
         w.save()
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="INFO") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -293,7 +300,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
 
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="INFO") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -355,7 +362,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
 
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="DEBUG") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -406,7 +413,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
 
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="DEBUG") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -467,7 +474,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
 
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="DEBUG") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -528,7 +535,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
 
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="DEBUG") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -590,7 +597,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
 
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="DEBUG") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -685,7 +692,7 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
 
         test_file = self.SAMPLE_DIR / "simple.pdf"
 
-        with mock.patch("documents.tasks.async_to_sync"):
+        with mock.patch("documents.tasks.ProgressManager", DummyProgressManager):
             with self.assertLogs("paperless.matching", level="INFO") as cm:
                 tasks.consume_file(
                     ConsumableDocument(
@@ -965,6 +972,50 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
             expected_str = f"Document correspondent {doc.correspondent} does not match {trigger.filter_has_correspondent}"
             self.assertIn(expected_str, cm.output[1])
 
+    def test_document_added_invalid_title_placeholders(self):
+        """
+        GIVEN:
+            - Existing workflow with added trigger type
+            - Assign title field has an error
+        WHEN:
+            - File that matches is added
+        THEN:
+            - Title is not updated, error is output
+        """
+        trigger = WorkflowTrigger.objects.create(
+            type=WorkflowTrigger.WorkflowTriggerType.DOCUMENT_ADDED,
+            filter_filename="*sample*",
+        )
+        action = WorkflowAction.objects.create(
+            assign_title="Doc {created_year]",
+        )
+        w = Workflow.objects.create(
+            name="Workflow 1",
+            order=0,
+        )
+        w.triggers.add(trigger)
+        w.actions.add(action)
+        w.save()
+
+        now = timezone.localtime(timezone.now())
+        created = now - timedelta(weeks=520)
+        doc = Document.objects.create(
+            original_filename="sample.pdf",
+            title="sample test",
+            content="Hello world bar",
+            created=created,
+        )
+
+        with self.assertLogs("paperless.handlers", level="ERROR") as cm:
+            document_consumption_finished.send(
+                sender=self.__class__,
+                document=doc,
+            )
+            expected_str = f"Error occurred parsing title assignment '{action.assign_title}', falling back to original"
+            self.assertIn(expected_str, cm.output[0])
+
+        self.assertEqual(doc.title, "sample test")
+
     def test_document_updated_workflow(self):
         trigger = WorkflowTrigger.objects.create(
             type=WorkflowTrigger.WorkflowTriggerType.DOCUMENT_UPDATED,
@@ -996,6 +1047,113 @@ class TestWorkflows(DirectoriesMixin, FileSystemAssertsMixin, APITestCase):
         )
 
         self.assertEqual(doc.custom_fields.all().count(), 1)
+
+    def test_document_updated_workflow_existing_custom_field(self):
+        """
+        GIVEN:
+            - Existing workflow with UPDATED trigger and action that adds a custom field
+        WHEN:
+            - Document is updated that already contains the field
+        THEN:
+            - Document update succeeds without trying to re-create the field
+        """
+        trigger = WorkflowTrigger.objects.create(
+            type=WorkflowTrigger.WorkflowTriggerType.DOCUMENT_UPDATED,
+            filter_has_document_type=self.dt,
+        )
+        action = WorkflowAction.objects.create()
+        action.assign_custom_fields.add(self.cf1)
+        w = Workflow.objects.create(
+            name="Workflow 1",
+            order=0,
+        )
+        w.triggers.add(trigger)
+        w.actions.add(action)
+        w.save()
+
+        doc = Document.objects.create(
+            title="sample test",
+            correspondent=self.c,
+            original_filename="sample.pdf",
+        )
+        CustomFieldInstance.objects.create(document=doc, field=self.cf1)
+
+        superuser = User.objects.create_superuser("superuser")
+        self.client.force_authenticate(user=superuser)
+
+        self.client.patch(
+            f"/api/documents/{doc.id}/",
+            {"document_type": self.dt.id},
+            format="json",
+        )
+
+    def test_document_updated_workflow_merge_permissions(self):
+        """
+        GIVEN:
+            - Existing workflow with UPDATED trigger and action that sets permissions
+        WHEN:
+            - Document is updated that already has permissions
+        THEN:
+            - Permissions are merged
+        """
+        trigger = WorkflowTrigger.objects.create(
+            type=WorkflowTrigger.WorkflowTriggerType.DOCUMENT_UPDATED,
+            filter_has_document_type=self.dt,
+        )
+        action = WorkflowAction.objects.create()
+        action.assign_view_users.add(self.user3)
+        action.assign_change_users.add(self.user3)
+        action.assign_view_groups.add(self.group2)
+        action.save()
+
+        w = Workflow.objects.create(
+            name="Workflow 1",
+            order=0,
+        )
+        w.triggers.add(trigger)
+        w.actions.add(action)
+        w.save()
+
+        doc = Document.objects.create(
+            title="sample test",
+            correspondent=self.c,
+            original_filename="sample.pdf",
+        )
+
+        assign_perm("documents.view_document", self.user2, doc)
+        assign_perm("documents.change_document", self.user2, doc)
+        assign_perm("documents.view_document", self.group1, doc)
+        assign_perm("documents.change_document", self.group1, doc)
+
+        superuser = User.objects.create_superuser("superuser")
+        self.client.force_authenticate(user=superuser)
+
+        self.client.patch(
+            f"/api/documents/{doc.id}/",
+            {"document_type": self.dt.id},
+            format="json",
+        )
+
+        view_users_perms: QuerySet = get_users_with_perms(
+            doc,
+            only_with_perms_in=["view_document"],
+        )
+        change_users_perms: QuerySet = get_users_with_perms(
+            doc,
+            only_with_perms_in=["change_document"],
+        )
+        # user2 should still have permissions
+        self.assertIn(self.user2, view_users_perms)
+        self.assertIn(self.user2, change_users_perms)
+        # user3 should have been added
+        self.assertIn(self.user3, view_users_perms)
+        self.assertIn(self.user3, change_users_perms)
+
+        group_perms: QuerySet = get_groups_with_perms(doc)
+        # group1 should still have permissions
+        self.assertIn(self.group1, group_perms)
+        # group2 should have been added
+        self.assertIn(self.group2, group_perms)
 
     def test_workflow_enabled_disabled(self):
         trigger = WorkflowTrigger.objects.create(

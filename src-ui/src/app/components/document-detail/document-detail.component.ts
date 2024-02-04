@@ -33,6 +33,7 @@ import {
   map,
   debounceTime,
   distinctUntilChanged,
+  filter,
 } from 'rxjs/operators'
 import { DocumentSuggestions } from 'src/app/data/document-suggestions'
 import {
@@ -74,6 +75,14 @@ enum DocumentDetailNavIDs {
   Preview = 4,
   Notes = 5,
   Permissions = 6,
+}
+
+enum ContentRenderType {
+  PDF = 'pdf',
+  Image = 'image',
+  Text = 'text',
+  Other = 'other',
+  Unknown = 'unknown',
 }
 
 enum ZoomSetting {
@@ -153,11 +162,13 @@ export class DocumentDetailComponent
   ogDate: Date
 
   customFields: CustomField[]
-  public readonly PaperlessCustomFieldDataType = CustomFieldDataType
+  public readonly CustomFieldDataType = CustomFieldDataType
+
+  public readonly ContentRenderType = ContentRenderType
 
   @ViewChild('nav') nav: NgbNav
   @ViewChild('pdfPreview') set pdfPreview(element) {
-    // this gets called when compontent added or removed from DOM
+    // this gets called when component added or removed from DOM
     if (
       element &&
       element.nativeElement.offsetParent !== null &&
@@ -200,16 +211,22 @@ export class DocumentDetailComponent
     return this.settings.get(SETTINGS_KEYS.USE_NATIVE_PDF_VIEWER)
   }
 
-  getContentType() {
-    return this.metadata?.has_archive_version
+  get contentRenderType(): ContentRenderType {
+    if (!this.metadata) return ContentRenderType.Unknown
+    const contentType = this.metadata?.has_archive_version
       ? 'application/pdf'
       : this.metadata?.original_mime_type
-  }
 
-  get renderAsPlainText(): boolean {
-    return ['text/plain', 'application/csv', 'text/csv'].includes(
-      this.getContentType()
-    )
+    if (contentType === 'application/pdf') {
+      return ContentRenderType.PDF
+    } else if (
+      ['text/plain', 'application/csv', 'text/csv'].includes(contentType)
+    ) {
+      return ContentRenderType.Text
+    } else if (contentType?.indexOf('image/') === 0) {
+      return ContentRenderType.Image
+    }
+    return ContentRenderType.Other
   }
 
   get isRTL() {
@@ -257,6 +274,13 @@ export class DocumentDetailComponent
 
     this.route.paramMap
       .pipe(
+        filter((paramMap) => {
+          // only init when changing docs & section is set
+          return (
+            +paramMap.get('id') !== this.documentId &&
+            paramMap.get('section')?.length > 0
+          )
+        }),
         takeUntil(this.unsubscribeNotifier),
         switchMap((paramMap) => {
           const documentId = +paramMap.get('id')
@@ -289,7 +313,23 @@ export class DocumentDetailComponent
           const openDocument = this.openDocumentService.getOpenDocument(
             this.documentId
           )
+
           if (openDocument) {
+            if (
+              new Date(doc.modified) > new Date(openDocument.modified) &&
+              !this.modalService.hasOpenModals()
+            ) {
+              let modal = this.modalService.open(ConfirmDialogComponent)
+              modal.componentInstance.title = $localize`Document changes detected`
+              modal.componentInstance.messageBold = $localize`The version of this document in your browser session appears older than the existing version.`
+              modal.componentInstance.message = $localize`Saving the document here may overwrite other changes that were made. To restore the existing version, discard your changes or close the document.`
+              modal.componentInstance.cancelBtnClass = 'visually-hidden'
+              modal.componentInstance.btnCaption = $localize`Ok`
+              modal.componentInstance.confirmClicked.subscribe(() =>
+                modal.close()
+              )
+            }
+
             if (this.documentForm.dirty) {
               Object.assign(openDocument, this.documentForm.value)
               openDocument['owner'] =
@@ -316,7 +356,7 @@ export class DocumentDetailComponent
             .subscribe({
               next: (titleValue) => {
                 // In the rare case when the field changed just after debounced event was fired.
-                // We dont want to overwrite whats actually in the text field, so just return
+                // We dont want to overwrite what's actually in the text field, so just return
                 if (titleValue !== this.titleInput.value) return
 
                 this.title = titleValue
@@ -409,11 +449,14 @@ export class DocumentDetailComponent
   updateComponent(doc: Document) {
     this.document = doc
     this.requiresPassword = false
-    // this.customFields = doc.custom_fields.concat([])
     this.updateFormForCustomFields()
     this.documentsService
       .getMetadata(doc.id)
-      .pipe(first())
+      .pipe(
+        first(),
+        takeUntil(this.unsubscribeNotifier),
+        takeUntil(this.docChangeNotifier)
+      )
       .subscribe({
         next: (result) => {
           this.metadata = result
@@ -434,7 +477,11 @@ export class DocumentDetailComponent
     ) {
       this.documentsService
         .getSuggestions(doc.id)
-        .pipe(first(), takeUntil(this.unsubscribeNotifier))
+        .pipe(
+          first(),
+          takeUntil(this.unsubscribeNotifier),
+          takeUntil(this.docChangeNotifier)
+        )
         .subscribe({
           next: (result) => {
             this.suggestions = result
@@ -830,8 +877,11 @@ export class DocumentDetailComponent
   get userIsOwner(): boolean {
     let doc: Document = Object.assign({}, this.document)
     // dont disable while editing
-    if (this.document && this.store?.value.permissions_form?.owner) {
-      doc.owner = this.store?.value.permissions_form?.owner
+    if (
+      this.document &&
+      this.store?.value.permissions_form?.hasOwnProperty('owner')
+    ) {
+      doc.owner = this.store.value.permissions_form.owner
     }
     return !this.document || this.permissionsService.currentUserOwnsObject(doc)
   }
@@ -839,8 +889,11 @@ export class DocumentDetailComponent
   get userCanEdit(): boolean {
     let doc: Document = Object.assign({}, this.document)
     // dont disable while editing
-    if (this.document && this.store?.value.permissions_form?.owner) {
-      doc.owner = this.store?.value.permissions_form?.owner
+    if (
+      this.document &&
+      this.store?.value.permissions_form?.hasOwnProperty('owner')
+    ) {
+      doc.owner = this.store.value.permissions_form.owner
     }
     return (
       !this.document ||
