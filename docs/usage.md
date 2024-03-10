@@ -253,7 +253,8 @@ permissions can be granted to limit access to certain parts of the UI (and corre
 ### Password reset
 
 In order to enable the password reset feature you will need to setup an SMTP backend, see
-[`PAPERLESS_EMAIL_HOST`](configuration.md#PAPERLESS_EMAIL_HOST)
+[`PAPERLESS_EMAIL_HOST`](configuration.md#PAPERLESS_EMAIL_HOST). If your installation does not have
+[`PAPERLESS_URL`](configuration.md#PAPERLESS_URL) set, the reset link included in emails will use the server host.
 
 ## Workflows
 
@@ -328,13 +329,20 @@ Workflows allow you to filter by:
 
 ### Workflow Actions
 
-There is currently one type of workflow action, "Assignment", which can assign:
+There are currently two types of workflow actions, "Assignment", which can assign:
 
 - Title, see [title placeholders](usage.md#title-placeholders) below
-- Tags, correspondent, document types
+- Tags, correspondent, document type and storage path
 - Document owner
 - View and / or edit permissions to users or groups
 - Custom fields. Note that no value for the field will be set
+
+and "Removal" actions, which can remove either all of or specific sets of the following:
+
+- Tags, correspondents, document types or storage paths
+- Document owner
+- View and / or edit permissions
+- Custom fields
 
 #### Title placeholders
 
@@ -406,7 +414,7 @@ The following custom field types are supported:
 - `URL`: a valid url
 - `Integer`: integer number e.g. 12
 - `Number`: float number e.g. 12.3456
-- `Monetary`: float number with exactly two decimals, e.g. 12.30
+- `Monetary`: [ISO 4217 currency code](https://en.wikipedia.org/wiki/ISO_4217#List_of_ISO_4217_currency_codes) and a number with exactly two decimals, e.g. USD12.30
 - `Document Link`: reference(s) to other document(s) displayed as links, automatically creates a symmetrical link in reverse
 
 ## Share Links

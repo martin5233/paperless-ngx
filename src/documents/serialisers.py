@@ -12,6 +12,7 @@ from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import DecimalValidator
 from django.core.validators import MaxLengthValidator
+from django.core.validators import RegexValidator
 from django.core.validators import integer_validator
 from django.utils import timezone
 from django.utils.crypto import get_random_string
@@ -81,14 +82,15 @@ class MatchingModelSerializer(serializers.ModelSerializer):
     slug = SerializerMethodField()
 
     def validate(self, data):
-        # see https://github.com/encode/django-rest-framework/issues/7173
-        name = data["name"] if "name" in data else self.instance.name
+        # TODO: remove pending https://github.com/encode/django-rest-framework/issues/7173
+        name = data.get(
+            "name",
+            self.instance.name if hasattr(self.instance, "name") else None,
+        )
         owner = (
             data["owner"]
             if "owner" in data
-            else self.user
-            if hasattr(self, "user")
-            else None
+            else self.user if hasattr(self, "user") else None
         )
         pk = self.instance.pk if hasattr(self.instance, "pk") else None
         if ("name" in data or "owner" in data) and self.Meta.model.objects.filter(
@@ -261,7 +263,7 @@ class OwnedObjectSerializer(serializers.ModelSerializer, SetPermissionsMixin):
         if "set_permissions" in validated_data:
             self._set_permissions(validated_data["set_permissions"], instance)
         if "owner" in validated_data and "name" in self.Meta.fields:
-            name = validated_data["name"] if "name" in validated_data else instance.name
+            name = validated_data.get("name", instance.name)
             not_unique = (
                 self.Meta.model.objects.exclude(pk=instance.pk)
                 .filter(owner=validated_data["owner"], name=name)
@@ -441,6 +443,20 @@ class CustomFieldSerializer(serializers.ModelSerializer):
             "data_type",
         ]
 
+    def validate(self, attrs):
+        # TODO: remove pending https://github.com/encode/django-rest-framework/issues/7173
+        name = attrs.get(
+            "name",
+            self.instance.name if hasattr(self.instance, "name") else None,
+        )
+        if ("name" in attrs) and self.Meta.model.objects.filter(
+            name=name,
+        ).exists():
+            raise serializers.ValidationError(
+                {"error": "Object violates name unique constraint"},
+            )
+        return super().validate(attrs)
+
 
 class ReadWriteSerializerMethodField(serializers.SerializerMethodField):
     """
@@ -513,9 +529,17 @@ class CustomFieldInstanceSerializer(serializers.ModelSerializer):
             elif field.data_type == CustomField.FieldDataType.INT:
                 integer_validator(data["value"])
             elif field.data_type == CustomField.FieldDataType.MONETARY:
-                DecimalValidator(max_digits=12, decimal_places=2)(
-                    Decimal(str(data["value"])),
-                )
+                try:
+                    # First try to validate as a number from legacy format
+                    DecimalValidator(max_digits=12, decimal_places=2)(
+                        Decimal(str(data["value"])),
+                    )
+                except Exception:
+                    # If that fails, try to validate as a monetary string
+                    RegexValidator(
+                        regex=r"^[A-Z][A-Z][A-Z]\d+(\.\d{2,2})$",
+                        message="Must be a two-decimal number with optional currency code e.g. GBP123.45",
+                    )(data["value"])
             elif field.data_type == CustomField.FieldDataType.STRING:
                 MaxLengthValidator(limit_value=128)(data["value"])
 
@@ -638,6 +662,13 @@ class DocumentSerializer(
         allow_null=True,
     )
 
+    remove_inbox_tags = serializers.BooleanField(
+        default=False,
+        write_only=True,
+        allow_null=True,
+        required=False,
+    )
+
     def get_original_file_name(self, obj):
         return obj.original_filename
 
@@ -681,11 +712,44 @@ class DocumentSerializer(
                             custom_field_instance.field,
                             doc_id,
                         )
+        if validated_data.get("remove_inbox_tags"):
+            tag_ids_being_added = (
+                [
+                    tag.id
+                    for tag in validated_data["tags"]
+                    if tag not in instance.tags.all()
+                ]
+                if "tags" in validated_data
+                else []
+            )
+            inbox_tags_not_being_added = Tag.objects.filter(is_inbox_tag=True).exclude(
+                id__in=tag_ids_being_added,
+            )
+            if "tags" in validated_data:
+                validated_data["tags"] = [
+                    tag
+                    for tag in validated_data["tags"]
+                    if tag not in inbox_tags_not_being_added
+                ]
+            else:
+                validated_data["tags"] = [
+                    tag
+                    for tag in instance.tags.all()
+                    if tag not in inbox_tags_not_being_added
+                ]
         super().update(instance, validated_data)
         return instance
 
     def __init__(self, *args, **kwargs):
         self.truncate_content = kwargs.pop("truncate_content", False)
+
+        # return full permissions if we're doing a PATCH or PUT
+        context = kwargs.get("context")
+        if (
+            context.get("request").method == "PATCH"
+            or context.get("request").method == "PUT"
+        ):
+            kwargs["full_perms"] = True
 
         super().__init__(*args, **kwargs)
 
@@ -714,6 +778,7 @@ class DocumentSerializer(
             "set_permissions",
             "notes",
             "custom_fields",
+            "remove_inbox_tags",
         )
 
 
@@ -916,6 +981,8 @@ class BulkEditSerializer(DocumentListSerializer, SetPermissionsMixin):
         )
         if "owner" in parameters and parameters["owner"] is not None:
             self._validate_owner(parameters["owner"])
+        if "merge" not in parameters:
+            parameters["merge"] = False
 
     def validate(self, attrs):
         method = attrs["method"]
@@ -1225,7 +1292,7 @@ class ShareLinkSerializer(OwnedObjectSerializer):
         return super().create(validated_data)
 
 
-class BulkEditObjectPermissionsSerializer(serializers.Serializer, SetPermissionsMixin):
+class BulkEditObjectsSerializer(serializers.Serializer, SetPermissionsMixin):
     objects = serializers.ListField(
         required=True,
         allow_empty=False,
@@ -1245,6 +1312,16 @@ class BulkEditObjectPermissionsSerializer(serializers.Serializer, SetPermissions
         write_only=True,
     )
 
+    operation = serializers.ChoiceField(
+        choices=[
+            "set_permissions",
+            "delete",
+        ],
+        label="Operation",
+        required=True,
+        write_only=True,
+    )
+
     owner = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.all(),
         required=False,
@@ -1256,6 +1333,12 @@ class BulkEditObjectPermissionsSerializer(serializers.Serializer, SetPermissions
         allow_empty=False,
         required=False,
         write_only=True,
+    )
+
+    merge = serializers.BooleanField(
+        default=False,
+        write_only=True,
+        required=False,
     )
 
     def get_object_class(self, object_type):
@@ -1291,11 +1374,14 @@ class BulkEditObjectPermissionsSerializer(serializers.Serializer, SetPermissions
     def validate(self, attrs):
         object_type = attrs["object_type"]
         objects = attrs["objects"]
-        permissions = attrs["permissions"] if "permissions" in attrs else None
+        operation = attrs.get("operation")
 
         self._validate_objects(objects, object_type)
-        if permissions is not None:
-            self._validate_permissions(permissions)
+
+        if operation == "set_permissions":
+            permissions = attrs.get("permissions")
+            if permissions is not None:
+                self._validate_permissions(permissions)
 
         return attrs
 
@@ -1335,9 +1421,6 @@ class WorkflowTriggerSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
-        if ("filter_mailrule") in attrs and attrs["filter_mailrule"] is not None:
-            attrs["sources"] = {DocumentSource.MailFetch.value}
-
         # Empty strings treated as None to avoid unexpected behavior
         if (
             "filter_filename" in attrs
@@ -1388,6 +1471,23 @@ class WorkflowActionSerializer(serializers.ModelSerializer):
             "assign_change_users",
             "assign_change_groups",
             "assign_custom_fields",
+            "remove_all_tags",
+            "remove_tags",
+            "remove_all_correspondents",
+            "remove_correspondents",
+            "remove_all_document_types",
+            "remove_document_types",
+            "remove_all_storage_paths",
+            "remove_storage_paths",
+            "remove_custom_fields",
+            "remove_all_custom_fields",
+            "remove_all_owners",
+            "remove_owners",
+            "remove_all_permissions",
+            "remove_view_users",
+            "remove_view_groups",
+            "remove_change_users",
+            "remove_change_groups",
         ]
 
     def validate(self, attrs):
@@ -1453,7 +1553,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
             for trigger in triggers:
                 filter_has_tags = trigger.pop("filter_has_tags", None)
                 trigger_instance, _ = WorkflowTrigger.objects.update_or_create(
-                    id=trigger["id"] if "id" in trigger else None,
+                    id=trigger.get("id"),
                     defaults=trigger,
                 )
                 if filter_has_tags is not None:
@@ -1468,10 +1568,22 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 assign_change_users = action.pop("assign_change_users", None)
                 assign_change_groups = action.pop("assign_change_groups", None)
                 assign_custom_fields = action.pop("assign_custom_fields", None)
+                remove_tags = action.pop("remove_tags", None)
+                remove_correspondents = action.pop("remove_correspondents", None)
+                remove_document_types = action.pop("remove_document_types", None)
+                remove_storage_paths = action.pop("remove_storage_paths", None)
+                remove_custom_fields = action.pop("remove_custom_fields", None)
+                remove_owners = action.pop("remove_owners", None)
+                remove_view_users = action.pop("remove_view_users", None)
+                remove_view_groups = action.pop("remove_view_groups", None)
+                remove_change_users = action.pop("remove_change_users", None)
+                remove_change_groups = action.pop("remove_change_groups", None)
+
                 action_instance, _ = WorkflowAction.objects.update_or_create(
-                    id=action["id"] if "id" in action else None,
+                    id=action.get("id"),
                     defaults=action,
                 )
+
                 if assign_tags is not None:
                     action_instance.assign_tags.set(assign_tags)
                 if assign_view_users is not None:
@@ -1484,6 +1596,27 @@ class WorkflowSerializer(serializers.ModelSerializer):
                     action_instance.assign_change_groups.set(assign_change_groups)
                 if assign_custom_fields is not None:
                     action_instance.assign_custom_fields.set(assign_custom_fields)
+                if remove_tags is not None:
+                    action_instance.remove_tags.set(remove_tags)
+                if remove_correspondents is not None:
+                    action_instance.remove_correspondents.set(remove_correspondents)
+                if remove_document_types is not None:
+                    action_instance.remove_document_types.set(remove_document_types)
+                if remove_storage_paths is not None:
+                    action_instance.remove_storage_paths.set(remove_storage_paths)
+                if remove_custom_fields is not None:
+                    action_instance.remove_custom_fields.set(remove_custom_fields)
+                if remove_owners is not None:
+                    action_instance.remove_owners.set(remove_owners)
+                if remove_view_users is not None:
+                    action_instance.remove_view_users.set(remove_view_users)
+                if remove_view_groups is not None:
+                    action_instance.remove_view_groups.set(remove_view_groups)
+                if remove_change_users is not None:
+                    action_instance.remove_change_users.set(remove_change_users)
+                if remove_change_groups is not None:
+                    action_instance.remove_change_groups.set(remove_change_groups)
+
                 set_actions.append(action_instance)
 
         instance.triggers.set(set_triggers)

@@ -112,7 +112,12 @@ import { SwitchComponent } from './components/common/input/switch/switch.compone
 import { ConfigComponent } from './components/admin/config/config.component'
 import { FileComponent } from './components/common/input/file/file.component'
 import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { ConfirmButtonComponent } from './components/common/confirm-button/confirm-button.component'
+import { MonetaryComponent } from './components/common/input/monetary/monetary.component'
+import { SystemStatusDialogComponent } from './components/common/system-status-dialog/system-status-dialog.component'
+import { NgxFilesizeModule } from 'ngx-filesize'
 import {
+  airplane,
   archive,
   arrowCounterclockwise,
   arrowDown,
@@ -127,16 +132,19 @@ import {
   boxes,
   calendar,
   calendarEvent,
+  cardChecklist,
   caretDown,
   caretUp,
   chatLeftText,
   check,
   check2All,
   checkAll,
+  checkCircleFill,
   checkLg,
   chevronDoubleLeft,
   chevronDoubleRight,
   clipboard,
+  clipboardCheck,
   clipboardCheckFill,
   clipboardFill,
   dash,
@@ -145,7 +153,9 @@ import {
   doorOpen,
   download,
   envelope,
+  exclamationCircleFill,
   exclamationTriangle,
+  exclamationTriangleFill,
   eye,
   fileEarmark,
   fileEarmarkCheck,
@@ -197,6 +207,7 @@ import {
 } from 'ngx-bootstrap-icons'
 
 const icons = {
+  airplane,
   archive,
   arrowCounterclockwise,
   arrowDown,
@@ -211,16 +222,19 @@ const icons = {
   boxes,
   calendar,
   calendarEvent,
+  cardChecklist,
   caretDown,
   caretUp,
   chatLeftText,
   check,
   check2All,
   checkAll,
+  checkCircleFill,
   checkLg,
   chevronDoubleLeft,
   chevronDoubleRight,
   clipboard,
+  clipboardCheck,
   clipboardCheckFill,
   clipboardFill,
   dash,
@@ -229,7 +243,9 @@ const icons = {
   doorOpen,
   download,
   envelope,
+  exclamationCircleFill,
   exclamationTriangle,
+  exclamationTriangleFill,
   eye,
   fileEarmark,
   fileEarmarkCheck,
@@ -295,6 +311,7 @@ import localeFi from '@angular/common/locales/fi'
 import localeFr from '@angular/common/locales/fr'
 import localeHu from '@angular/common/locales/hu'
 import localeIt from '@angular/common/locales/it'
+import localeJa from '@angular/common/locales/ja'
 import localeLb from '@angular/common/locales/lb'
 import localeNl from '@angular/common/locales/nl'
 import localeNo from '@angular/common/locales/no'
@@ -325,6 +342,7 @@ registerLocaleData(localeFi)
 registerLocaleData(localeFr)
 registerLocaleData(localeHu)
 registerLocaleData(localeIt)
+registerLocaleData(localeJa)
 registerLocaleData(localeLb)
 registerLocaleData(localeNl)
 registerLocaleData(localeNo)
@@ -437,6 +455,9 @@ function initializeApp(settings: SettingsService) {
     SwitchComponent,
     ConfigComponent,
     FileComponent,
+    ConfirmButtonComponent,
+    MonetaryComponent,
+    SystemStatusDialogComponent,
   ],
   imports: [
     BrowserModule,
@@ -451,6 +472,7 @@ function initializeApp(settings: SettingsService) {
     TourNgBootstrapModule,
     DragDropModule,
     NgxBootstrapIconsModule.pick(icons),
+    NgxFilesizeModule,
   ],
   providers: [
     {

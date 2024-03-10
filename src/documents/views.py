@@ -2,6 +2,7 @@ import itertools
 import json
 import logging
 import os
+import platform
 import re
 import tempfile
 import urllib
@@ -13,12 +14,17 @@ from unicodedata import normalize
 from urllib.parse import quote
 
 import pathvalidate
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.db import connections
+from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.recorder import MigrationRecorder
 from django.db.models import Case
 from django.db.models import Count
 from django.db.models import IntegerField
 from django.db.models import Max
+from django.db.models import Q
 from django.db.models import Sum
 from django.db.models import When
 from django.db.models.functions import Length
@@ -31,14 +37,17 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.decorators import method_decorator
+from django.utils.timezone import make_aware
 from django.utils.translation import get_language
 from django.views import View
 from django.views.decorators.cache import cache_control
 from django.views.decorators.http import condition
+from django.views.decorators.http import last_modified
 from django.views.generic import TemplateView
 from django_filters.rest_framework import DjangoFilterBackend
 from langdetect import detect
 from packaging import version as packaging_version
+from redis import Redis
 from rest_framework import parsers
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
@@ -50,6 +59,7 @@ from rest_framework.mixins import DestroyModelMixin
 from rest_framework.mixins import ListModelMixin
 from rest_framework.mixins import RetrieveModelMixin
 from rest_framework.mixins import UpdateModelMixin
+from rest_framework.permissions import DjangoModelPermissions
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -59,15 +69,25 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 from rest_framework.viewsets import ViewSet
 
 from documents import bulk_edit
+from documents import index
 from documents.bulk_download import ArchiveOnlyStrategy
 from documents.bulk_download import OriginalAndArchiveStrategy
 from documents.bulk_download import OriginalsOnlyStrategy
+from documents.caching import CACHE_50_MINUTES
+from documents.caching import get_metadata_cache
+from documents.caching import get_suggestion_cache
+from documents.caching import refresh_metadata_cache
+from documents.caching import refresh_suggestions_cache
+from documents.caching import set_metadata_cache
+from documents.caching import set_suggestions_cache
 from documents.classifier import load_classifier
 from documents.conditionals import metadata_etag
 from documents.conditionals import metadata_last_modified
 from documents.conditionals import preview_etag
+from documents.conditionals import preview_last_modified
 from documents.conditionals import suggestions_etag
 from documents.conditionals import suggestions_last_modified
+from documents.conditionals import thumbnail_last_modified
 from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentMetadataOverrides
 from documents.data_models import DocumentSource
@@ -93,6 +113,7 @@ from documents.models import SavedView
 from documents.models import ShareLink
 from documents.models import StoragePath
 from documents.models import Tag
+from documents.models import UiSettings
 from documents.models import Workflow
 from documents.models import WorkflowAction
 from documents.models import WorkflowTrigger
@@ -105,7 +126,7 @@ from documents.permissions import has_perms_owner_aware
 from documents.permissions import set_permissions_for_object
 from documents.serialisers import AcknowledgeTasksViewSerializer
 from documents.serialisers import BulkDownloadSerializer
-from documents.serialisers import BulkEditObjectPermissionsSerializer
+from documents.serialisers import BulkEditObjectsSerializer
 from documents.serialisers import BulkEditSerializer
 from documents.serialisers import CorrespondentSerializer
 from documents.serialisers import CustomFieldSerializer
@@ -126,6 +147,7 @@ from documents.serialisers import WorkflowTriggerSerializer
 from documents.signals import document_updated
 from documents.tasks import consume_file
 from paperless import version
+from paperless.celery import app as celery_app
 from paperless.config import GeneralConfig
 from paperless.db import GnuPG
 from paperless.views import StandardPagination
@@ -165,16 +187,16 @@ class IndexView(TemplateView):
         context["full_name"] = self.request.user.get_full_name()
         context["styles_css"] = f"frontend/{self.get_frontend_language()}/styles.css"
         context["runtime_js"] = f"frontend/{self.get_frontend_language()}/runtime.js"
-        context[
-            "polyfills_js"
-        ] = f"frontend/{self.get_frontend_language()}/polyfills.js"
+        context["polyfills_js"] = (
+            f"frontend/{self.get_frontend_language()}/polyfills.js"
+        )
         context["main_js"] = f"frontend/{self.get_frontend_language()}/main.js"
-        context[
-            "webmanifest"
-        ] = f"frontend/{self.get_frontend_language()}/manifest.webmanifest"
-        context[
-            "apple_touch_icon"
-        ] = f"frontend/{self.get_frontend_language()}/apple-touch-icon.png"
+        context["webmanifest"] = (
+            f"frontend/{self.get_frontend_language()}/manifest.webmanifest"
+        )
+        context["apple_touch_icon"] = (
+            f"frontend/{self.get_frontend_language()}/apple-touch-icon.png"
+        )
         return context
 
 
@@ -192,12 +214,37 @@ class PassUserMixin(CreateModelMixin):
         return super().get_serializer(*args, **kwargs)
 
 
-class CorrespondentViewSet(ModelViewSet, PassUserMixin):
+class PermissionsAwareDocumentCountMixin(PassUserMixin):
+    """
+    Mixin to add document count to queryset, permissions-aware if needed
+    """
+
+    def get_queryset(self):
+        filter = (
+            None
+            if self.request.user is None or self.request.user.is_superuser
+            else (
+                Q(
+                    documents__id__in=get_objects_for_user_owner_aware(
+                        self.request.user,
+                        "documents.view_document",
+                        Document,
+                    ).values_list("id", flat=True),
+                )
+            )
+        )
+        return (
+            super()
+            .get_queryset()
+            .annotate(document_count=Count("documents", filter=filter))
+        )
+
+
+class CorrespondentViewSet(ModelViewSet, PermissionsAwareDocumentCountMixin):
     model = Correspondent
 
     queryset = (
         Correspondent.objects.annotate(
-            document_count=Count("documents"),
             last_correspondence=Max("documents__created"),
         )
         .select_related("owner")
@@ -222,15 +269,11 @@ class CorrespondentViewSet(ModelViewSet, PassUserMixin):
     )
 
 
-class TagViewSet(ModelViewSet, PassUserMixin):
+class TagViewSet(ModelViewSet, PermissionsAwareDocumentCountMixin):
     model = Tag
 
-    queryset = (
-        Tag.objects.annotate(document_count=Count("documents"))
-        .select_related("owner")
-        .order_by(
-            Lower("name"),
-        )
+    queryset = Tag.objects.select_related("owner").order_by(
+        Lower("name"),
     )
 
     def get_serializer_class(self, *args, **kwargs):
@@ -250,16 +293,10 @@ class TagViewSet(ModelViewSet, PassUserMixin):
     ordering_fields = ("color", "name", "matching_algorithm", "match", "document_count")
 
 
-class DocumentTypeViewSet(ModelViewSet, PassUserMixin):
+class DocumentTypeViewSet(ModelViewSet, PermissionsAwareDocumentCountMixin):
     model = DocumentType
 
-    queryset = (
-        DocumentType.objects.annotate(
-            document_count=Count("documents"),
-        )
-        .select_related("owner")
-        .order_by(Lower("name"))
-    )
+    queryset = DocumentType.objects.select_related("owner").order_by(Lower("name"))
 
     serializer_class = DocumentTypeSerializer
     pagination_class = StandardPagination
@@ -379,10 +416,12 @@ class DocumentViewSet(
 
             try:
                 return parser.extract_metadata(file, mime_type)
-            except Exception:
+            except Exception:  # pragma: no cover
+                logger.exception(f"Issue getting metadata for {file}")
                 # TODO: cover GPG errors, remove later.
                 return []
-        else:
+        else:  # pragma: no cover
+            logger.warning(f"No parser for {mime_type}")
             return []
 
     def get_filesize(self, filename):
@@ -407,16 +446,37 @@ class DocumentViewSet(
         except Document.DoesNotExist:
             raise Http404
 
+        document_cached_metadata = get_metadata_cache(doc.pk)
+
+        archive_metadata = None
+        archive_filesize = None
+        if document_cached_metadata is not None:
+            original_metadata = document_cached_metadata.original_metadata
+            archive_metadata = document_cached_metadata.archive_metadata
+            refresh_metadata_cache(doc.pk)
+        else:
+            original_metadata = self.get_metadata(doc.source_path, doc.mime_type)
+
+            if doc.has_archive_version:
+                archive_filesize = self.get_filesize(doc.archive_path)
+                archive_metadata = self.get_metadata(
+                    doc.archive_path,
+                    "application/pdf",
+                )
+            set_metadata_cache(doc, original_metadata, archive_metadata)
+
         meta = {
             "original_checksum": doc.checksum,
             "original_size": self.get_filesize(doc.source_path),
             "original_mime_type": doc.mime_type,
             "media_filename": doc.filename,
             "has_archive_version": doc.has_archive_version,
-            "original_metadata": self.get_metadata(doc.source_path, doc.mime_type),
+            "original_metadata": original_metadata,
             "archive_checksum": doc.archive_checksum,
             "archive_media_filename": doc.archive_filename,
             "original_filename": doc.original_filename,
+            "archive_size": archive_filesize,
+            "archive_metadata": archive_metadata,
         }
 
         lang = "en"
@@ -425,16 +485,6 @@ class DocumentViewSet(
         except Exception:
             pass
         meta["lang"] = lang
-
-        if doc.has_archive_version:
-            meta["archive_size"] = self.get_filesize(doc.archive_path)
-            meta["archive_metadata"] = self.get_metadata(
-                doc.archive_path,
-                "application/pdf",
-            )
-        else:
-            meta["archive_size"] = None
-            meta["archive_metadata"] = None
 
         return Response(meta)
 
@@ -454,6 +504,12 @@ class DocumentViewSet(
         ):
             return HttpResponseForbidden("Insufficient permissions")
 
+        document_suggestions = get_suggestion_cache(doc.pk)
+
+        if document_suggestions is not None:
+            refresh_suggestions_cache(doc.pk)
+            return Response(document_suggestions.suggestions)
+
         classifier = load_classifier()
 
         dates = []
@@ -463,27 +519,30 @@ class DocumentViewSet(
                 {i for i in itertools.islice(gen, settings.NUMBER_OF_SUGGESTED_DATES)},
             )
 
-        return Response(
-            {
-                "correspondents": [
-                    c.id for c in match_correspondents(doc, classifier, request.user)
-                ],
-                "tags": [t.id for t in match_tags(doc, classifier, request.user)],
-                "document_types": [
-                    dt.id for dt in match_document_types(doc, classifier, request.user)
-                ],
-                "storage_paths": [
-                    dt.id for dt in match_storage_paths(doc, classifier, request.user)
-                ],
-                "dates": [
-                    date.strftime("%Y-%m-%d") for date in dates if date is not None
-                ],
-            },
-        )
+        resp_data = {
+            "correspondents": [
+                c.id for c in match_correspondents(doc, classifier, request.user)
+            ],
+            "tags": [t.id for t in match_tags(doc, classifier, request.user)],
+            "document_types": [
+                dt.id for dt in match_document_types(doc, classifier, request.user)
+            ],
+            "storage_paths": [
+                dt.id for dt in match_storage_paths(doc, classifier, request.user)
+            ],
+            "dates": [date.strftime("%Y-%m-%d") for date in dates if date is not None],
+        }
+
+        # Cache the suggestions and the classifier hash for later
+        set_suggestions_cache(doc.pk, resp_data, classifier)
+
+        return Response(resp_data)
 
     @action(methods=["get"], detail=True)
     @method_decorator(cache_control(public=False, max_age=5 * 60))
-    @method_decorator(condition(etag_func=preview_etag))
+    @method_decorator(
+        condition(etag_func=preview_etag, last_modified_func=preview_last_modified),
+    )
     def preview(self, request, pk=None):
         try:
             response = self.file_response(pk, request, "inline")
@@ -492,7 +551,8 @@ class DocumentViewSet(
             raise Http404
 
     @action(methods=["get"], detail=True)
-    @method_decorator(cache_control(public=False, max_age=315360000))
+    @method_decorator(cache_control(public=False, max_age=CACHE_50_MINUTES))
+    @method_decorator(last_modified(thumbnail_last_modified))
     def thumb(self, request, pk=None):
         try:
             doc = Document.objects.get(id=pk)
@@ -506,8 +566,6 @@ class DocumentViewSet(
                 handle = GnuPG.decrypted(doc.thumbnail_file)
             else:
                 handle = doc.thumbnail_file
-            # TODO: Send ETag information and use that to send new thumbnails
-            #  if available
 
             return HttpResponse(handle, content_type="image/webp")
         except (FileNotFoundError, Document.DoesNotExist):
@@ -691,9 +749,9 @@ class SearchResultSerializer(DocumentSerializer, PassUserMixin):
         r["__search_hit__"] = {
             "score": instance.score,
             "highlights": instance.highlights("content", text=doc.content),
-            "note_highlights": instance.highlights("notes", text=notes)
-            if doc
-            else None,
+            "note_highlights": (
+                instance.highlights("notes", text=notes) if doc else None
+            ),
             "rank": instance.rank,
         }
 
@@ -873,7 +931,7 @@ class PostDocumentView(GenericAPIView):
 
         t = int(mktime(datetime.now().timetuple()))
 
-        os.makedirs(settings.SCRATCH_DIR, exist_ok=True)
+        settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
 
         temp_file_path = Path(tempfile.mkdtemp(dir=settings.SCRATCH_DIR)) / Path(
             pathvalidate.sanitize_filename(doc_name),
@@ -1105,7 +1163,7 @@ class BulkDownloadView(GenericAPIView):
         content = serializer.validated_data.get("content")
         follow_filename_format = serializer.validated_data.get("follow_formatting")
 
-        os.makedirs(settings.SCRATCH_DIR, exist_ok=True)
+        settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
         temp = tempfile.NamedTemporaryFile(
             dir=settings.SCRATCH_DIR,
             suffix="-compressed-archive",
@@ -1135,15 +1193,11 @@ class BulkDownloadView(GenericAPIView):
             return response
 
 
-class StoragePathViewSet(ModelViewSet, PassUserMixin):
+class StoragePathViewSet(ModelViewSet, PermissionsAwareDocumentCountMixin):
     model = StoragePath
 
-    queryset = (
-        StoragePath.objects.annotate(document_count=Count("documents"))
-        .select_related("owner")
-        .order_by(
-            Lower("name"),
-        )
+    queryset = StoragePath.objects.select_related("owner").order_by(
+        Lower("name"),
     )
 
     serializer_class = StoragePathSerializer
@@ -1157,10 +1211,32 @@ class StoragePathViewSet(ModelViewSet, PassUserMixin):
     filterset_class = StoragePathFilterSet
     ordering_fields = ("name", "path", "matching_algorithm", "match", "document_count")
 
+    def destroy(self, request, *args, **kwargs):
+        """
+        When a storage path is deleted, see if documents
+        using it require a rename/move
+        """
+        instance = self.get_object()
+        doc_ids = [doc.id for doc in instance.documents.all()]
+
+        # perform the deletion so renaming/moving can happen
+        response = super().destroy(request, *args, **kwargs)
+
+        if len(doc_ids):
+            bulk_edit.bulk_update_documents.delay(doc_ids)
+
+        return response
+
 
 class UiSettingsView(GenericAPIView):
-    permission_classes = (IsAuthenticated,)
+    queryset = UiSettings.objects.all()
+    permission_classes = (IsAuthenticated, DjangoModelPermissions)
     serializer_class = UiSettingsViewSerializer
+
+    perms_map = {
+        "GET": ["%(app_label)s.view_%(model_name)s"],
+        "POST": ["%(app_label)s.change_%(model_name)s"],
+    }
 
     def get(self, request, format=None):
         serializer = self.get_serializer(data=request.data)
@@ -1370,9 +1446,9 @@ def serve_file(doc: Document, use_archive: bool, disposition: str):
     return response
 
 
-class BulkEditObjectPermissionsView(GenericAPIView, PassUserMixin):
+class BulkEditObjectsView(GenericAPIView, PassUserMixin):
     permission_classes = (IsAuthenticated,)
-    serializer_class = BulkEditObjectPermissionsSerializer
+    serializer_class = BulkEditObjectsSerializer
     parser_classes = (parsers.JSONParser,)
 
     def post(self, request, *args, **kwargs):
@@ -1383,32 +1459,60 @@ class BulkEditObjectPermissionsView(GenericAPIView, PassUserMixin):
         object_type = serializer.validated_data.get("object_type")
         object_ids = serializer.validated_data.get("objects")
         object_class = serializer.get_object_class(object_type)
-        permissions = serializer.validated_data.get("permissions")
-        owner = serializer.validated_data.get("owner")
+        operation = serializer.validated_data.get("operation")
+
+        objs = object_class.objects.filter(pk__in=object_ids)
 
         if not user.is_superuser:
-            objs = object_class.objects.filter(pk__in=object_ids)
-            has_perms = all((obj.owner == user or obj.owner is None) for obj in objs)
+            model_name = object_class._meta.verbose_name
+            perm = (
+                f"documents.change_{model_name}"
+                if operation == "set_permissions"
+                else f"documents.delete_{model_name}"
+            )
+            has_perms = user.has_perm(perm) and all(
+                (obj.owner == user or obj.owner is None) for obj in objs
+            )
 
             if not has_perms:
                 return HttpResponseForbidden("Insufficient permissions")
 
-        try:
-            qs = object_class.objects.filter(id__in=object_ids)
+        if operation == "set_permissions":
+            permissions = serializer.validated_data.get("permissions")
+            owner = serializer.validated_data.get("owner")
+            merge = serializer.validated_data.get("merge")
 
-            if "owner" in serializer.validated_data:
-                qs.update(owner=owner)
+            try:
+                qs = object_class.objects.filter(id__in=object_ids)
 
-            if "permissions" in serializer.validated_data:
-                for obj in qs:
-                    set_permissions_for_object(permissions, obj)
+                # if merge is true, we dont want to remove the owner
+                if "owner" in serializer.validated_data and (
+                    not merge or (merge and owner is not None)
+                ):
+                    # if merge is true, we dont want to overwrite the owner
+                    qs_owner_update = qs.filter(owner__isnull=True) if merge else qs
+                    qs_owner_update.update(owner=owner)
 
-            return Response({"result": "OK"})
-        except Exception as e:
-            logger.warning(f"An error occurred performing bulk permissions edit: {e!s}")
-            return HttpResponseBadRequest(
-                "Error performing bulk permissions edit, check logs for more detail.",
-            )
+                if "permissions" in serializer.validated_data:
+                    for obj in qs:
+                        set_permissions_for_object(
+                            permissions=permissions,
+                            object=obj,
+                            merge=merge,
+                        )
+
+            except Exception as e:
+                logger.warning(
+                    f"An error occurred performing bulk permissions edit: {e!s}",
+                )
+                return HttpResponseBadRequest(
+                    "Error performing bulk permissions edit, check logs for more detail.",
+                )
+
+        elif operation == "delete":
+            objs.delete()
+
+        return Response({"result": "OK"})
 
 
 class WorkflowTriggerViewSet(ModelViewSet):
@@ -1472,3 +1576,168 @@ class CustomFieldViewSet(ModelViewSet):
     model = CustomField
 
     queryset = CustomField.objects.all().order_by("-created")
+
+
+class SystemStatusView(GenericAPIView, PassUserMixin):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, format=None):
+        if not request.user.has_perm("admin.view_logentry"):
+            return HttpResponseForbidden("Insufficient permissions")
+
+        current_version = version.__full_version_str__
+
+        install_type = "bare-metal"
+        if os.environ.get("KUBERNETES_SERVICE_HOST") is not None:
+            install_type = "kubernetes"
+        elif os.environ.get("PNGX_CONTAINERIZED") == "1":
+            install_type = "docker"
+
+        db_conn = connections["default"]
+        db_url = db_conn.settings_dict["NAME"]
+        db_error = None
+
+        try:
+            db_conn.ensure_connection()
+            db_status = "OK"
+            loader = MigrationLoader(connection=db_conn)
+            all_migrations = [f"{app}.{name}" for app, name in loader.graph.nodes]
+            applied_migrations = [
+                f"{m.app}.{m.name}"
+                for m in MigrationRecorder.Migration.objects.all().order_by("id")
+            ]
+        except Exception as e:  # pragma: no cover
+            applied_migrations = []
+            db_status = "ERROR"
+            logger.exception(
+                f"System status detected a possible problem while connecting to the database: {e}",
+            )
+            db_error = "Error connecting to database, check logs for more detail."
+
+        media_stats = os.statvfs(settings.MEDIA_ROOT)
+
+        redis_url = settings._CHANNELS_REDIS_URL
+        redis_error = None
+        with Redis.from_url(url=redis_url) as client:
+            try:
+                client.ping()
+                redis_status = "OK"
+            except Exception as e:
+                redis_status = "ERROR"
+                logger.exception(
+                    f"System status detected a possible problem while connecting to redis: {e}",
+                )
+                redis_error = "Error connecting to redis, check logs for more detail."
+
+        try:
+            celery_ping = celery_app.control.inspect().ping()
+            first_worker_ping = celery_ping[next(iter(celery_ping.keys()))]
+            if first_worker_ping["ok"] == "pong":
+                celery_active = "OK"
+        except Exception:
+            celery_active = "ERROR"
+
+        index_error = None
+        try:
+            ix = index.open_index()
+            index_status = "OK"
+            index_last_modified = make_aware(
+                datetime.fromtimestamp(ix.last_modified()),
+            )
+        except Exception as e:
+            index_status = "ERROR"
+            index_error = "Error opening index, check logs for more detail."
+            logger.exception(
+                f"System status detected a possible problem while opening the index: {e}",
+            )
+            index_last_modified = None
+
+        classifier_error = None
+        classifier_status = None
+        try:
+            classifier = load_classifier()
+            if classifier is None:
+                # Make sure classifier should exist
+                docs_queryset = Document.objects.exclude(
+                    tags__is_inbox_tag=True,
+                )
+                if (
+                    docs_queryset.count() > 0
+                    and (
+                        Tag.objects.filter(matching_algorithm=Tag.MATCH_AUTO).exists()
+                        or DocumentType.objects.filter(
+                            matching_algorithm=Tag.MATCH_AUTO,
+                        ).exists()
+                        or Correspondent.objects.filter(
+                            matching_algorithm=Tag.MATCH_AUTO,
+                        ).exists()
+                        or StoragePath.objects.filter(
+                            matching_algorithm=Tag.MATCH_AUTO,
+                        ).exists()
+                    )
+                    and not os.path.isfile(settings.MODEL_FILE)
+                ):
+                    # if classifier file doesn't exist just classify as a warning
+                    classifier_error = "Classifier file does not exist (yet). Re-training may be pending."
+                    classifier_status = "WARNING"
+                    raise FileNotFoundError(classifier_error)
+            classifier_status = "OK"
+            task_result_model = apps.get_model("django_celery_results", "taskresult")
+            result = (
+                task_result_model.objects.filter(
+                    task_name="documents.tasks.train_classifier",
+                    status="SUCCESS",
+                )
+                .order_by(
+                    "-date_done",
+                )
+                .first()
+            )
+            classifier_last_trained = result.date_done if result else None
+        except Exception as e:
+            if classifier_status is None:
+                classifier_status = "ERROR"
+            classifier_last_trained = None
+            if classifier_error is None:
+                classifier_error = (
+                    "Unable to load classifier, check logs for more detail."
+                )
+            logger.exception(
+                f"System status detected a possible problem while loading the classifier: {e}",
+            )
+
+        return Response(
+            {
+                "pngx_version": current_version,
+                "server_os": platform.platform(),
+                "install_type": install_type,
+                "storage": {
+                    "total": media_stats.f_frsize * media_stats.f_blocks,
+                    "available": media_stats.f_frsize * media_stats.f_bavail,
+                },
+                "database": {
+                    "type": db_conn.vendor,
+                    "url": db_url,
+                    "status": db_status,
+                    "error": db_error,
+                    "migration_status": {
+                        "latest_migration": applied_migrations[-1],
+                        "unapplied_migrations": [
+                            m for m in all_migrations if m not in applied_migrations
+                        ],
+                    },
+                },
+                "tasks": {
+                    "redis_url": redis_url,
+                    "redis_status": redis_status,
+                    "redis_error": redis_error,
+                    "celery_status": celery_active,
+                    "index_status": index_status,
+                    "index_last_modified": index_last_modified,
+                    "index_error": index_error,
+                    "classifier_status": classifier_status,
+                    "classifier_last_trained": classifier_last_trained,
+                    "classifier_error": classifier_error,
+                },
+            },
+        )
