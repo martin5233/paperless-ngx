@@ -30,14 +30,14 @@ Thanks to the generous folks at [DigitalOcean](https://m.do.co/c/8d70b916d462), 
   - [Translation](#translation)
   - [Feature Requests](#feature-requests)
   - [Bugs](#bugs)
-- [Affiliated Projects](#affiliated-projects)
+- [Related Projects](#related-projects)
 - [Important Note](#important-note)
 
 <p align="right">This project is supported by:<br/>
   <a href="https://m.do.co/c/8d70b916d462" style="padding-top: 4px; display: block;">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://opensource.nyc3.cdn.digitaloceanspaces.com/attribution/assets/SVG/DO_Logo_horizontal_white.svg" width="140px">
-      <source media="(prefers-color-scheme: light)" srcset="https://opensource.nyc3.cdn.digitaloceanspaces.com/attribution/assets/SVG/DO_Logo_horizontal_black_.svg" width="140px">
+      <source media="(prefers-color-scheme: light)" srcset="https://opensource.nyc3.cdn.digitaloceanspaces.com/attribution/assets/SVG/DO_Logo_horizontal_blue.svg" width="140px">
       <img src="https://opensource.nyc3.cdn.digitaloceanspaces.com/attribution/assets/SVG/DO_Logo_horizontal_black_.svg" width="140px">
     </picture>
   </a>
@@ -63,7 +63,7 @@ If you'd like to jump right in, you can configure a `docker compose` environment
 bash -c "$(curl -L https://raw.githubusercontent.com/paperless-ngx/paperless-ngx/main/install-paperless-ngx.sh)"
 ```
 
-Alternatively, you can install the dependencies and setup apache and a database server yourself. The [documentation](https://docs.paperless-ngx.com/setup/#installation) has a step by step guide on how to do it.
+More details and step-by-step guides for alternative installation methods can be found in [the documentation](https://docs.paperless-ngx.com/setup/#installation).
 
 Migrating from Paperless-ng is easy, just drop in the new docker image! See the [documentation on migrating](https://docs.paperless-ngx.com/setup/#migrating-to-paperless-ngx) for more details.
 
@@ -93,9 +93,9 @@ Feature requests can be submitted via [GitHub Discussions](https://github.com/pa
 
 For bugs please [open an issue](https://github.com/paperless-ngx/paperless-ngx/issues) or [start a discussion](https://github.com/paperless-ngx/paperless-ngx/discussions) if you have questions.
 
-# Affiliated Projects
+# Related Projects
 
-Please see [the wiki](https://github.com/paperless-ngx/paperless-ngx/wiki/Affiliated-Projects) for a user-maintained list of affiliated projects and software that is compatible with Paperless-ngx.
+Please see [the wiki](https://github.com/paperless-ngx/paperless-ngx/wiki/Related-Projects) for a user-maintained list of related projects and software that is compatible with Paperless-ngx.
 
 # Important Note
 

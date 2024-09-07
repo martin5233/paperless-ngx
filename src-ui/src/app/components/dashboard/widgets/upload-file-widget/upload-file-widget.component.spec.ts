@@ -1,4 +1,4 @@
-import { HttpClientTestingModule } from '@angular/common/http/testing'
+import { provideHttpClientTesting } from '@angular/common/http/testing'
 import {
   ComponentFixture,
   TestBed,
@@ -27,6 +27,7 @@ import { WidgetFrameComponent } from '../widget-frame/widget-frame.component'
 import { UploadFileWidgetComponent } from './upload-file-widget.component'
 import { DragDropModule } from '@angular/cdk/drag-drop'
 import { NgxBootstrapIconsModule, allIcons } from 'ngx-bootstrap-icons'
+import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http'
 
 const FAILED_STATUSES = [new FileStatus()]
 const WORKING_STATUSES = [new FileStatus(), new FileStatus()]
@@ -59,6 +60,13 @@ describe('UploadFileWidgetComponent', () => {
         WidgetFrameComponent,
         IfPermissionsDirective,
       ],
+      imports: [
+        NgbModule,
+        RouterTestingModule.withRoutes(routes),
+        NgbAlertModule,
+        DragDropModule,
+        NgxBootstrapIconsModule.pick(allIcons),
+      ],
       providers: [
         PermissionsGuard,
         {
@@ -67,14 +75,8 @@ describe('UploadFileWidgetComponent', () => {
             currentUserCan: () => true,
           },
         },
-      ],
-      imports: [
-        HttpClientTestingModule,
-        NgbModule,
-        RouterTestingModule.withRoutes(routes),
-        NgbAlertModule,
-        DragDropModule,
-        NgxBootstrapIconsModule.pick(allIcons),
+        provideHttpClient(withInterceptorsFromDi()),
+        provideHttpClientTesting(),
       ],
     }).compileComponents()
 
@@ -149,7 +151,7 @@ describe('UploadFileWidgetComponent', () => {
     expect(dismissSpy).toHaveBeenCalled()
   })
 
-  it('should allow dismissing all alerts', fakeAsync(() => {
+  it('should allow dismissing completed alerts', fakeAsync(() => {
     mockConsumerStatuses(consumerStatusService)
     component.alertsExpanded = true
     fixture.detectChanges()
@@ -160,7 +162,7 @@ describe('UploadFileWidgetComponent', () => {
     component.dismissCompleted()
     tick(1000)
     fixture.detectChanges()
-    expect(dismissSpy).toHaveBeenCalledTimes(10)
+    expect(dismissSpy).toHaveBeenCalledTimes(4)
   }))
 })
 

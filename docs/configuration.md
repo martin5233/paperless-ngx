@@ -219,10 +219,10 @@ database, classification model, etc).
 
     Defaults to "../data/", relative to the "src" directory.
 
-#### [`PAPERLESS_TRASH_DIR=<path>`](#PAPERLESS_TRASH_DIR) {#PAPERLESS_TRASH_DIR}
+#### [`PAPERLESS_EMPTY_TRASH_DIR=<path>`](#PAPERLESS_EMPTY_TRASH_DIR) {#PAPERLESS_EMPTY_TRASH_DIR}
 
-: Instead of removing deleted documents, they are moved to this
-directory.
+: When documents are deleted (e.g. after emptying the trash) the original files will be moved here
+instead of being removed from the filesystem. Only the original version is kept.
 
     This must be writeable by the user running paperless. When running
     inside docker, ensure that this path is within a permanent volume
@@ -230,7 +230,9 @@ directory.
 
     Note that the directory must exist prior to using this setting.
 
-    Defaults to empty (i.e. really delete documents).
+    Defaults to empty (i.e. really delete files).
+
+    This setting was previously named PAPERLESS_TRASH_DIR.
 
 #### [`PAPERLESS_MEDIA_ROOT=<path>`](#PAPERLESS_MEDIA_ROOT) {#PAPERLESS_MEDIA_ROOT}
 
@@ -287,6 +289,12 @@ Unless you are using this in a bare metal install or other setup,
 this folder is no longer needed and can be removed manually.
 
 Defaults to `/usr/share/nltk_data`
+
+#### [`PAPERLESS_MODEL_FILE=<path>`](#PAPERLESS_MODEL_FILE) {#PAPERLESS_MODEL_FILE}
+
+: This is where paperless will store the classification model.
+
+    Defaults to `PAPERLESS_DATA_DIR/classification_model.pickle`.
 
 ## Logging
 
@@ -586,7 +594,15 @@ system. See the corresponding
 
 #### [`PAPERLESS_DISABLE_REGULAR_LOGIN=<bool>`](#PAPERLESS_DISABLE_REGULAR_LOGIN) {#PAPERLESS_DISABLE_REGULAR_LOGIN}
 
-: Disables the regular frontend username / password login, i.e. once you have setup SSO. Note that this setting does not disable the Django admin login. To prevent logins directly to Django, consider blocking `/admin/` in your [web server or reverse proxy configuration](https://github.com/paperless-ngx/paperless-ngx/wiki/Using-a-Reverse-Proxy-with-Paperless-ngx).
+: Disables the regular frontend username / password login, i.e. once you have setup SSO. Note that this setting does not disable the Django admin login nor logging in with local credentials via the API. To prevent access to the Django admin, consider blocking `/admin/` in your [web server or reverse proxy configuration](https://github.com/paperless-ngx/paperless-ngx/wiki/Using-a-Reverse-Proxy-with-Paperless-ngx).
+
+You can optionally also automatically redirect users to the SSO login with [PAPERLESS_REDIRECT_LOGIN_TO_SSO](#PAPERLESS_REDIRECT_LOGIN_TO_SSO)
+
+    Defaults to False
+
+#### [`PAPERLESS_REDIRECT_LOGIN_TO_SSO=<bool>`](#PAPERLESS_REDIRECT_LOGIN_TO_SSO) {#PAPERLESS_REDIRECT_LOGIN_TO_SSO}
+
+: When this setting is enabled users will automatically be redirected (using javascript) to the first SSO provider login. You may still want to disable the frontend login form for clarity.
 
     Defaults to False
 
@@ -615,6 +631,8 @@ parsing documents.
     in which case Tesseract will use whatever language matches best.
     Keep in mind that Tesseract uses much more CPU time with multiple
     languages enabled.
+
+    If you are including languages that are not installed by default, you will need to also set [`PAPERLESS_OCR_LANGUAGES`](configuration.md#PAPERLESS_OCR_LANGUAGES) for docker deployments or install the tesseract language packages manually for bare metal installations.
 
     Defaults to "eng".
 
@@ -1276,7 +1294,7 @@ assigns or creates tags if a properly formatted barcode is detected.
 
 : Defines a dictionary of filter regex and substitute expressions.
 
-    Syntax: {"<regex>": "<substitute>" [,...]]}
+    Syntax: `{"<regex>": "<substitute>" [,...]]}`
 
     A barcode is considered for tagging if the barcode text matches
     at least one of the provided <regex> pattern.
@@ -1288,20 +1306,20 @@ assigns or creates tags if a properly formatted barcode is detected.
 
     Defaults to:
 
-    {"TAG:(.*)": "\\g<1>"} which defines
+    `{"TAG:(.*)": "\\g<1>"}` which defines
     - a regex TAG:(.*) which includes barcodes beginning with TAG:
       followed by any text that gets stored into match group #1 and
-    - a substitute \\g<1> that replaces the original barcode text
+    - a substitute `\\g<1>` that replaces the original barcode text
       by the content in match group #1.
     Consequently, the tag is the barcode text without its TAG: prefix.
 
     More examples:
 
-    {"ASN12.*": "JOHN", "ASN13.*": "SMITH"} for example maps
+    `{"ASN12.*": "JOHN", "ASN13.*": "SMITH"}` for example maps
     - ASN12nnnn barcodes to the tag JOHN and
     - ASN13nnnn barcodes to the tag SMITH.
 
-    {"T-J": "JOHN", "T-S": "SMITH", "T-D": "DOE"} directly maps
+    `{"T-J": "JOHN", "T-S": "SMITH", "T-D": "DOE"}` directly maps
     - T-J barcodes to the tag JOHN,
     - T-S barcodes to the tag SMITH and
     - T-D barcodes to the tag DOE.
@@ -1353,6 +1371,20 @@ processing. This only has an effect if
 `PAPERLESS_CONSUMER_ENABLE_COLLATE_DOUBLE_SIDED` has been enabled.
 
     Defaults to false.
+
+## Trash
+
+#### [`PAPERLESS_EMPTY_TRASH_DELAY=<num>`](#PAPERLESS_EMPTY_TRASH_DELAY) {#PAPERLESS_EMPTY_TRASH_DELAY}
+
+: Sets how long in days documents remain in the 'trash' before they are permanently deleted.
+
+    Defaults to 30 days, minimum of 1 day.
+
+#### [`PAPERLESS_EMPTY_TRASH_TASK_CRON=<cron expression>`](#PAPERLESS_EMPTY_TRASH_TASK_CRON) {#PAPERLESS_EMPTY_TRASH_TASK_CRON}
+
+: Configures the schedule to empty the trash of expired deleted documents.
+
+    Defaults to `0 1 * * *`, once per day.
 
 ## Binaries
 
@@ -1484,7 +1516,7 @@ started by the container.
 
 ## Frontend Settings
 
-#### [`PAPERLESS_APP_TITLE=<bool>`](#PAPERLESS_APP_TITLE) {#PAPERLESS_APP_TITLE}
+#### [`PAPERLESS_APP_TITLE=<str>`](#PAPERLESS_APP_TITLE) {#PAPERLESS_APP_TITLE}
 
 : If set, overrides the default name "Paperless-ngx"
 

@@ -21,6 +21,7 @@ from documents.views import BulkEditView
 from documents.views import CorrespondentViewSet
 from documents.views import CustomFieldViewSet
 from documents.views import DocumentTypeViewSet
+from documents.views import GlobalSearchView
 from documents.views import IndexView
 from documents.views import LogViewSet
 from documents.views import PostDocumentView
@@ -35,6 +36,7 @@ from documents.views import StoragePathViewSet
 from documents.views import SystemStatusView
 from documents.views import TagViewSet
 from documents.views import TasksViewSet
+from documents.views import TrashView
 from documents.views import UiSettingsView
 from documents.views import UnifiedSearchViewSet
 from documents.views import WorkflowActionViewSet
@@ -90,6 +92,11 @@ urlpatterns = [
                     "^search/autocomplete/",
                     SearchAutoCompleteView.as_view(),
                     name="autocomplete",
+                ),
+                re_path(
+                    "^search/",
+                    GlobalSearchView.as_view(),
+                    name="global_search",
                 ),
                 re_path("^statistics/", StatisticsView.as_view(), name="statistics"),
                 re_path(
@@ -152,6 +159,11 @@ urlpatterns = [
                     "^status/",
                     SystemStatusView.as_view(),
                     name="system_status",
+                ),
+                re_path(
+                    "^trash/",
+                    TrashView.as_view(),
+                    name="trash",
                 ),
                 *api_router.urls,
             ],

@@ -112,7 +112,7 @@ def __get_list(
         return []
 
 
-def _parse_redis_url(env_redis: Optional[str]) -> tuple[str]:
+def _parse_redis_url(env_redis: Optional[str]) -> tuple[str, str]:
     """
     Gets the Redis information from the environment or a default and handles
     converting from incompatible django_channels and celery formats.
@@ -171,8 +171,7 @@ def _parse_beat_schedule() -> dict:
             "task": "paperless_mail.tasks.process_mail_accounts",
             "options": {
                 # 1 minute before default schedule sends again
-                "expires": 9.0
-                * 60.0,
+                "expires": 9.0 * 60.0,
             },
         },
         {
@@ -183,8 +182,7 @@ def _parse_beat_schedule() -> dict:
             "task": "documents.tasks.train_classifier",
             "options": {
                 # 1 minute before default schedule sends again
-                "expires": 59.0
-                * 60.0,
+                "expires": 59.0 * 60.0,
             },
         },
         {
@@ -195,9 +193,7 @@ def _parse_beat_schedule() -> dict:
             "task": "documents.tasks.index_optimize",
             "options": {
                 # 1 hour before default schedule sends again
-                "expires": 23.0
-                * 60.0
-                * 60.0,
+                "expires": 23.0 * 60.0 * 60.0,
             },
         },
         {
@@ -208,9 +204,18 @@ def _parse_beat_schedule() -> dict:
             "task": "documents.tasks.sanity_check",
             "options": {
                 # 1 hour before default schedule sends again
-                "expires": ((7.0 * 24.0) - 1.0)
-                * 60.0
-                * 60.0,
+                "expires": ((7.0 * 24.0) - 1.0) * 60.0 * 60.0,
+            },
+        },
+        {
+            "name": "Empty trash",
+            "env_key": "PAPERLESS_EMPTY_TRASH_TASK_CRON",
+            # Default daily at 01:00
+            "env_default": "0 1 * * *",
+            "task": "documents.tasks.empty_trash",
+            "options": {
+                # 1 hour before default schedule sends again
+                "expires": 23.0 * 60.0 * 60.0,
             },
         },
     ]
@@ -256,13 +261,20 @@ DATA_DIR = __get_path("PAPERLESS_DATA_DIR", BASE_DIR.parent / "data")
 
 NLTK_DIR = __get_path("PAPERLESS_NLTK_DIR", "/usr/share/nltk_data")
 
-TRASH_DIR = os.getenv("PAPERLESS_TRASH_DIR")
+# Check deprecated setting first
+EMPTY_TRASH_DIR = os.getenv(
+    "PAPERLESS_TRASH_DIR",
+    os.getenv("PAPERLESS_EMPTY_TRASH_DIR"),
+)
 
 # Lock file for synchronizing changes to the MEDIA directory across multiple
 # threads.
 MEDIA_LOCK = MEDIA_ROOT / "media.lock"
 INDEX_DIR = DATA_DIR / "index"
-MODEL_FILE = DATA_DIR / "classification_model.pickle"
+MODEL_FILE = __get_path(
+    "PAPERLESS_MODEL_FILE",
+    DATA_DIR / "classification_model.pickle",
+)
 
 LOGGING_DIR = __get_path("PAPERLESS_LOGGING_DIR", DATA_DIR / "log")
 
@@ -357,7 +369,10 @@ def _parse_base_paths() -> tuple[str, str, str, str, str]:
     base_url = (script_name or "") + "/"
     login_url = base_url + "accounts/login/"
     login_redirect_url = base_url + "dashboard"
-    logout_redirect_url = os.getenv("PAPERLESS_LOGOUT_REDIRECT_URL", base_url)
+    logout_redirect_url = os.getenv(
+        "PAPERLESS_LOGOUT_REDIRECT_URL",
+        login_url + "?loggedout=1",
+    )
     return script_name, base_url, login_url, login_redirect_url, logout_redirect_url
 
 
@@ -448,6 +463,7 @@ SOCIALACCOUNT_PROVIDERS = json.loads(
 ACCOUNT_EMAIL_SUBJECT_PREFIX = "[Paperless-ngx] "
 
 DISABLE_REGULAR_LOGIN = __get_boolean("PAPERLESS_DISABLE_REGULAR_LOGIN")
+REDIRECT_LOGIN_TO_SSO = __get_boolean("PAPERLESS_REDIRECT_LOGIN_TO_SSO")
 
 AUTO_LOGIN_USERNAME = os.getenv("PAPERLESS_AUTO_LOGIN_USERNAME")
 
@@ -510,7 +526,7 @@ if DEBUG:
     CORS_ALLOWED_ORIGINS.append("http://localhost:4200")
 
 ALLOWED_HOSTS = __get_list("PAPERLESS_ALLOWED_HOSTS", ["*"])
-if ["*"] != ALLOWED_HOSTS:
+if ALLOWED_HOSTS != ["*"]:
     # always allow localhost. Necessary e.g. for healthcheck in docker.
     ALLOWED_HOSTS.append("localhost")
 
@@ -619,7 +635,7 @@ def _parse_db_settings() -> dict:
             }
 
         else:  # Default to PostgresDB
-            engine = "django.db.backends.postgresql_psycopg2"
+            engine = "django.db.backends.postgresql"
             options = {
                 "sslmode": os.getenv("PAPERLESS_DBSSLMODE", "prefer"),
                 "sslrootcert": os.getenv("PAPERLESS_DBSSLROOTCERT", None),
@@ -822,9 +838,9 @@ CACHES = {
 }
 
 if DEBUG and os.getenv("PAPERLESS_CACHE_BACKEND") is None:
-    CACHES["default"][
-        "BACKEND"
-    ] = "django.core.cache.backends.locmem.LocMemCache"  # pragma: no cover
+    CACHES["default"]["BACKEND"] = (
+        "django.core.cache.backends.locmem.LocMemCache"  # pragma: no cover
+    )
 
 
 def default_threads_per_worker(task_workers) -> int:
@@ -1110,6 +1126,10 @@ def _get_nltk_language_setting(ocr_lang: str) -> Optional[str]:
 
     NLTK Languages:
       - https://www.nltk.org/api/nltk.stem.snowball.html#nltk.stem.snowball.SnowballStemmer
+      - https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt.zip
+      - https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip
+
+    The common intersection between all languages in those 3 is handled here
 
     """
     ocr_lang = ocr_lang.split("+")[0]
@@ -1126,7 +1146,6 @@ def _get_nltk_language_setting(ocr_lang: str) -> Optional[str]:
         "rus": "russian",
         "spa": "spanish",
         "swe": "swedish",
-        "tur": "turkish",
     }
 
     return iso_code_to_nltk.get(ocr_lang)
@@ -1151,3 +1170,9 @@ EMAIL_SUBJECT_PREFIX: Final[str] = "[Paperless-ngx] "
 if DEBUG:  # pragma: no cover
     EMAIL_BACKEND = "django.core.mail.backends.filebased.EmailBackend"
     EMAIL_FILE_PATH = BASE_DIR / "sent_emails"
+
+
+###############################################################################
+# Soft Delete
+###############################################################################
+EMPTY_TRASH_DELAY = max(__get_int("PAPERLESS_EMPTY_TRASH_DELAY", 30), 1)

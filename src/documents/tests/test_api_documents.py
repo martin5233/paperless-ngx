@@ -316,6 +316,163 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
         response = self.client.get(f"/api/documents/{doc.pk}/thumb/")
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_document_history_action(self):
+        """
+        GIVEN:
+            - Document
+        WHEN:
+            - Document is updated
+        THEN:
+            - Audit log contains changes
+        """
+        doc = Document.objects.create(
+            title="First title",
+            checksum="123",
+            mime_type="application/pdf",
+        )
+        self.client.force_login(user=self.user)
+        self.client.patch(
+            f"/api/documents/{doc.pk}/",
+            {"title": "New title"},
+            format="json",
+        )
+
+        response = self.client.get(f"/api/documents/{doc.pk}/history/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        self.assertEqual(response.data[0]["actor"]["id"], self.user.id)
+        self.assertEqual(response.data[0]["action"], "update")
+        self.assertEqual(
+            response.data[0]["changes"],
+            {"title": ["First title", "New title"]},
+        )
+
+    def test_document_history_action_w_custom_fields(self):
+        """
+        GIVEN:
+            - Document with custom fields
+        WHEN:
+            - Document is updated
+        THEN:
+            - Audit log contains custom field changes
+        """
+        doc = Document.objects.create(
+            title="First title",
+            checksum="123",
+            mime_type="application/pdf",
+        )
+        custom_field = CustomField.objects.create(
+            name="custom field str",
+            data_type=CustomField.FieldDataType.STRING,
+        )
+        self.client.force_login(user=self.user)
+
+        # Initial response should include only document's creation
+        response = self.client.get(f"/api/documents/{doc.pk}/history/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+
+        self.assertIsNone(response.data[0]["actor"])
+        self.assertEqual(response.data[0]["action"], "create")
+
+        self.client.patch(
+            f"/api/documents/{doc.pk}/",
+            data={
+                "custom_fields": [
+                    {
+                        "field": custom_field.pk,
+                        "value": "custom value",
+                    },
+                ],
+            },
+            format="json",
+        )
+
+        # Second response should include custom field addition
+        response = self.client.get(f"/api/documents/{doc.pk}/history/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        self.assertEqual(response.data[0]["actor"]["id"], self.user.id)
+        self.assertEqual(response.data[0]["action"], "create")
+        self.assertEqual(
+            response.data[0]["changes"],
+            {
+                "custom_fields": {
+                    "type": "custom_field",
+                    "field": "custom field str",
+                    "value": "custom value",
+                },
+            },
+        )
+        self.assertIsNone(response.data[1]["actor"])
+        self.assertEqual(response.data[1]["action"], "create")
+
+    @override_settings(AUDIT_LOG_ENABLED=False)
+    def test_document_history_action_disabled(self):
+        """
+        GIVEN:
+            - Audit log is disabled
+        WHEN:
+            - Document is updated
+            - Audit log is requested
+        THEN:
+            - Audit log returns HTTP 400 Bad Request
+        """
+        doc = Document.objects.create(
+            title="First title",
+            checksum="123",
+            mime_type="application/pdf",
+        )
+        self.client.force_login(user=self.user)
+        self.client.patch(
+            f"/api/documents/{doc.pk}/",
+            {"title": "New title"},
+            format="json",
+        )
+
+        response = self.client.get(f"/api/documents/{doc.pk}/history/")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_document_history_insufficient_perms(self):
+        """
+        GIVEN:
+            - Audit log is enabled
+        WHEN:
+            - History is requested without auditlog permissions
+            - Or is requested as superuser on document with another owner
+        THEN:
+            - History endpoint returns HTTP 403 Forbidden
+            - History is returned
+        """
+        # No auditlog permissions
+        user = User.objects.create_user(username="test")
+        user.user_permissions.add(*Permission.objects.filter(codename="view_document"))
+        self.client.force_authenticate(user=user)
+        doc = Document.objects.create(
+            title="First title",
+            checksum="123",
+            mime_type="application/pdf",
+            owner=user,
+        )
+
+        response = self.client.get(f"/api/documents/{doc.pk}/history/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        # superuser
+        user.is_superuser = True
+        user.save()
+        user2 = User.objects.create_user(username="test2")
+        doc2 = Document.objects.create(
+            title="Second title",
+            checksum="456",
+            mime_type="application/pdf",
+            owner=user2,
+        )
+        response = self.client.get(f"/api/documents/{doc2.pk}/history/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
     def test_document_filters(self):
         doc1 = Document.objects.create(
             title="none1",
@@ -483,6 +640,38 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
         results = response.data["results"]
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["id"], doc3.id)
+
+    def test_custom_field_select_filter(self):
+        """
+        GIVEN:
+            - Documents with select custom field values
+        WHEN:
+            - API request with custom field filtering is made
+        THEN:
+            - Only docs with selected custom field values are returned
+        """
+        doc1 = Document.objects.create(checksum="1", content="test 1")
+        Document.objects.create(checksum="2", content="test 2")
+        custom_field_select = CustomField.objects.create(
+            name="Test Custom Field Select",
+            data_type=CustomField.FieldDataType.SELECT,
+            extra_data={
+                "select_options": ["Option 1", "Choice 2"],
+            },
+        )
+        CustomFieldInstance.objects.create(
+            document=doc1,
+            field=custom_field_select,
+            value_select=1,
+        )
+
+        r = self.client.get("/api/documents/?custom_fields__icontains=choice")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data["count"], 1)
+
+        r = self.client.get("/api/documents/?custom_fields__icontains=option")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data["count"], 0)
 
     def test_document_checksum_filter(self):
         Document.objects.create(
@@ -765,7 +954,7 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["documents_total"], 3)
         self.assertEqual(response.data["documents_inbox"], 1)
-        self.assertEqual(response.data["inbox_tag"], tag_inbox.pk)
+        self.assertEqual(response.data["inbox_tags"], [tag_inbox.pk])
         self.assertEqual(
             response.data["document_file_type_counts"][0]["mime_type_count"],
             2,
@@ -786,7 +975,46 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
         response = self.client.get("/api/statistics/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["documents_inbox"], None)
-        self.assertEqual(response.data["inbox_tag"], None)
+        self.assertEqual(response.data["inbox_tags"], None)
+
+    def test_statistics_multiple_users(self):
+        """
+        GIVEN:
+            - Inbox tags with different owners and documents that are accessible to different users
+        WHEN:
+            - Statistics are requested
+        THEN:
+            - Statistics only include inbox counts for tags accessible by the user
+        """
+        u1 = User.objects.create_user("user1")
+        u2 = User.objects.create_user("user2")
+        inbox_tag_u1 = Tag.objects.create(name="inbox_u1", is_inbox_tag=True, owner=u1)
+        Tag.objects.create(name="inbox_u2", is_inbox_tag=True, owner=u2)
+        doc_u1 = Document.objects.create(
+            title="none1",
+            checksum="A",
+            mime_type="application/pdf",
+            owner=u1,
+        )
+        doc2_u1 = Document.objects.create(
+            title="none2",
+            checksum="B",
+            mime_type="application/pdf",
+        )
+        doc_u1.tags.add(inbox_tag_u1)
+        doc2_u1.save()
+        doc2_u1.tags.add(inbox_tag_u1)
+        doc2_u1.save()
+
+        self.client.force_authenticate(user=u1)
+        response = self.client.get("/api/statistics/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["documents_inbox"], 2)
+
+        self.client.force_authenticate(user=u2)
+        response = self.client.get("/api/statistics/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["documents_inbox"], 0)
 
     def test_upload(self):
         self.consume_file_mock.return_value = celery.result.AsyncResult(
@@ -1487,7 +1715,7 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
             status.HTTP_404_NOT_FOUND,
         )
 
-    def test_create_update_patch(self):
+    def test_saved_view_create_update_patch(self):
         User.objects.create_user("user1")
 
         view = {
@@ -1533,6 +1761,155 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
 
         v1 = SavedView.objects.get(id=v1.id)
         self.assertEqual(v1.filter_rules.count(), 0)
+
+    def test_saved_view_display_options(self):
+        """
+        GIVEN:
+            - Saved view
+        WHEN:
+            - Updating display options
+        THEN:
+            - Display options are updated
+            - Display fields are validated
+        """
+        User.objects.create_user("user1")
+
+        view = {
+            "name": "test",
+            "show_on_dashboard": True,
+            "show_in_sidebar": True,
+            "sort_field": "created2",
+            "filter_rules": [{"rule_type": 4, "value": "test"}],
+            "page_size": 20,
+            "display_mode": SavedView.DisplayMode.SMALL_CARDS,
+            "display_fields": [
+                SavedView.DisplayFields.TITLE,
+                SavedView.DisplayFields.CREATED,
+            ],
+        }
+
+        response = self.client.post("/api/saved_views/", view, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        v1 = SavedView.objects.get(name="test")
+        self.assertEqual(v1.page_size, 20)
+        self.assertEqual(
+            v1.display_mode,
+            SavedView.DisplayMode.SMALL_CARDS,
+        )
+        self.assertEqual(
+            v1.display_fields,
+            [
+                SavedView.DisplayFields.TITLE,
+                SavedView.DisplayFields.CREATED,
+            ],
+        )
+
+        response = self.client.patch(
+            f"/api/saved_views/{v1.id}/",
+            {
+                "display_fields": [
+                    SavedView.DisplayFields.TAGS,
+                    SavedView.DisplayFields.TITLE,
+                    SavedView.DisplayFields.CREATED,
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        v1.refresh_from_db()
+        self.assertEqual(
+            v1.display_fields,
+            [
+                SavedView.DisplayFields.TAGS,
+                SavedView.DisplayFields.TITLE,
+                SavedView.DisplayFields.CREATED,
+            ],
+        )
+
+        # Invalid display field
+        response = self.client.patch(
+            f"/api/saved_views/{v1.id}/",
+            {
+                "display_fields": [
+                    "foobar",
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_saved_view_display_customfields(self):
+        """
+        GIVEN:
+            - Saved view
+        WHEN:
+            - Updating display options with custom fields
+        THEN:
+            - Display filds for custom fields are updated
+            - Display fields for custom fields are validated
+        """
+        view = {
+            "name": "test",
+            "show_on_dashboard": True,
+            "show_in_sidebar": True,
+            "sort_field": "created2",
+            "filter_rules": [{"rule_type": 4, "value": "test"}],
+            "page_size": 20,
+            "display_mode": SavedView.DisplayMode.SMALL_CARDS,
+            "display_fields": [
+                SavedView.DisplayFields.TITLE,
+                SavedView.DisplayFields.CREATED,
+            ],
+        }
+
+        response = self.client.post("/api/saved_views/", view, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        v1 = SavedView.objects.get(name="test")
+
+        custom_field = CustomField.objects.create(
+            name="stringfield",
+            data_type=CustomField.FieldDataType.STRING,
+        )
+
+        response = self.client.patch(
+            f"/api/saved_views/{v1.id}/",
+            {
+                "display_fields": [
+                    SavedView.DisplayFields.TITLE,
+                    SavedView.DisplayFields.CREATED,
+                    SavedView.DisplayFields.CUSTOM_FIELD % custom_field.id,
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        v1.refresh_from_db()
+        self.assertEqual(
+            v1.display_fields,
+            [
+                str(SavedView.DisplayFields.TITLE),
+                str(SavedView.DisplayFields.CREATED),
+                SavedView.DisplayFields.CUSTOM_FIELD % custom_field.id,
+            ],
+        )
+
+        # Custom field not found
+        response = self.client.patch(
+            f"/api/saved_views/{v1.id}/",
+            {
+                "display_fields": [
+                    SavedView.DisplayFields.TITLE,
+                    SavedView.DisplayFields.CREATED,
+                    SavedView.DisplayFields.CUSTOM_FIELD % 99,
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_get_logs(self):
         log_data = "test\ntest2\n"
