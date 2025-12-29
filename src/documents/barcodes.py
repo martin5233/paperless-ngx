@@ -55,11 +55,26 @@ class Barcode:
     @property
     def is_asn(self) -> bool:
         """
-        Returns True if the barcode value matches the configured ASN prefix,
+        Returns True if the barcode value matches the configured ASN prefix, and the
+        extracted number is below 1000
         False otherwise
         """
-        return self.value.startswith(self.settings.barcode_asn_prefix)
 
+        if not self.value.startswith(self.settings.asn_barcode_prefix):
+            return False
+
+        asn_text = self.value
+        asn_text = asn_text[len(settings.CONSUMER_ASN_BARCODE_PREFIX) :].strip()
+
+        # remove non-numeric parts of the remaining string
+        asn_text = re.sub("[^0-9]", "", asn_text)
+
+        # now, try parsing the ASN number
+        try:
+            asn = int(asn_text)
+            return 0 < asn <= 1000
+        except ValueError:
+            return False
 
 class BarcodePlugin(ConsumeTaskPlugin):
     NAME: str = "BarcodePlugin"
