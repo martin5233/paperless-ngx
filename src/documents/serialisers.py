@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from typing import Any
 from typing import Literal
 
 import magic
@@ -18,6 +19,8 @@ from django.core.exceptions import ValidationError
 from django.core.validators import DecimalValidator
 from django.core.validators import EmailValidator
 from django.core.validators import MaxLengthValidator
+from django.core.validators import MaxValueValidator
+from django.core.validators import MinValueValidator
 from django.core.validators import RegexValidator
 from django.core.validators import integer_validator
 from django.db.models import Count
@@ -38,6 +41,7 @@ from guardian.utils import get_group_obj_perms_model
 from guardian.utils import get_user_obj_perms_model
 from rest_framework import fields
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.fields import SerializerMethodField
 from rest_framework.filters import OrderingFilter
 
@@ -70,6 +74,8 @@ from documents.models import WorkflowTrigger
 from documents.parsers import is_mime_type_supported
 from documents.permissions import get_document_count_filter_for_user
 from documents.permissions import get_groups_with_only_permission
+from documents.permissions import get_objects_for_user_owner_aware
+from documents.permissions import has_perms_owner_aware
 from documents.permissions import set_permissions_for_object
 from documents.regex import validate_regex_pattern
 from documents.templating.filepath import validate_filepath_template_and_render
@@ -434,6 +440,19 @@ class OwnedObjectSerializer(
         return instance
 
     def update(self, instance, validated_data):
+        user = getattr(self, "user", None)
+        is_superuser = user.is_superuser if user is not None else False
+        is_owner = instance.owner == user if user is not None else False
+        is_unowned = instance.owner is None
+
+        if (
+            ("owner" in validated_data and validated_data["owner"] != instance.owner)
+            or "set_permissions" in validated_data
+        ) and not (is_superuser or is_owner or is_unowned):
+            raise PermissionDenied(
+                _("Insufficient permissions."),
+            )
+
         if "set_permissions" in validated_data:
             self._set_permissions(validated_data["set_permissions"], instance)
         self.validate_unique_together(validated_data, instance)
@@ -578,30 +597,34 @@ class TagSerializer(MatchingModelSerializer, OwnedObjectSerializer):
         ),
     )
     def get_children(self, obj):
-        filter_q = self.context.get("document_count_filter")
-        request = self.context.get("request")
-        if filter_q is None:
-            user = getattr(request, "user", None) if request else None
-            filter_q = get_document_count_filter_for_user(user)
-            self.context["document_count_filter"] = filter_q
+        children_map = self.context.get("children_map")
+        if children_map is not None:
+            children = children_map.get(obj.pk, [])
+        else:
+            filter_q = self.context.get("document_count_filter")
+            request = self.context.get("request")
+            if filter_q is None:
+                user = getattr(request, "user", None) if request else None
+                filter_q = get_document_count_filter_for_user(user)
+                self.context["document_count_filter"] = filter_q
 
-        children_queryset = (
-            obj.get_children_queryset()
-            .select_related("owner")
-            .annotate(document_count=Count("documents", filter=filter_q))
-        )
+            children = (
+                obj.get_children_queryset()
+                .select_related("owner")
+                .annotate(document_count=Count("documents", filter=filter_q))
+            )
 
-        view = self.context.get("view")
-        ordering = (
-            OrderingFilter().get_ordering(request, children_queryset, view)
-            if request and view
-            else None
-        )
-        ordering = ordering or (Lower("name"),)
-        children_queryset = children_queryset.order_by(*ordering)
+            view = self.context.get("view")
+            ordering = (
+                OrderingFilter().get_ordering(request, children, view)
+                if request and view
+                else None
+            )
+            ordering = ordering or (Lower("name"),)
+            children = children.order_by(*ordering)
 
         serializer = TagSerializer(
-            children_queryset,
+            children,
             many=True,
             user=self.user,
             full_perms=self.full_perms,
@@ -693,6 +716,9 @@ class StoragePathField(serializers.PrimaryKeyRelatedField):
 
 class CustomFieldSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
+        # Ignore args passed by permissions mixin
+        kwargs.pop("user", None)
+        kwargs.pop("full_perms", None)
         context = kwargs.get("context")
         self.api_version = int(
             context.get("request").version
@@ -827,6 +853,25 @@ class ReadWriteSerializerMethodField(serializers.SerializerMethodField):
         return {self.field_name: data}
 
 
+def validate_documentlink_targets(user, doc_ids):
+    if Document.objects.filter(id__in=doc_ids).count() != len(doc_ids):
+        raise serializers.ValidationError(
+            "Some documents in value don't exist or were specified twice.",
+        )
+
+    if user is None:
+        return
+
+    target_documents = Document.objects.filter(id__in=doc_ids).select_related("owner")
+    if not all(
+        has_perms_owner_aware(user, "change_document", document)
+        for document in target_documents
+    ):
+        raise PermissionDenied(
+            _("Insufficient permissions."),
+        )
+
+
 class CustomFieldInstanceSerializer(serializers.ModelSerializer):
     field = serializers.PrimaryKeyRelatedField(queryset=CustomField.objects.all())
     value = ReadWriteSerializerMethodField(allow_null=True)
@@ -875,6 +920,13 @@ class CustomFieldInstanceSerializer(serializers.ModelSerializer):
                 uri_validator(data["value"])
             elif field.data_type == CustomField.FieldDataType.INT:
                 integer_validator(data["value"])
+                try:
+                    value_int = int(data["value"])
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError("Enter a valid integer.")
+                # Keep values within the PostgreSQL integer range
+                MinValueValidator(-2147483648)(value_int)
+                MaxValueValidator(2147483647)(value_int)
             elif (
                 field.data_type == CustomField.FieldDataType.MONETARY
                 and data["value"] != ""
@@ -910,12 +962,11 @@ class CustomFieldInstanceSerializer(serializers.ModelSerializer):
                         "Value must be a list",
                     )
                 doc_ids = data["value"]
-                if Document.objects.filter(id__in=doc_ids).count() != len(
-                    data["value"],
-                ):
-                    raise serializers.ValidationError(
-                        "Some documents in value don't exist or were specified twice.",
-                    )
+                request = self.context.get("request")
+                validate_documentlink_targets(
+                    getattr(request, "user", None) if request is not None else None,
+                    doc_ids,
+                )
 
         return data
 
@@ -1464,6 +1515,19 @@ class BulkEditSerializer(
             raise serializers.ValidationError(
                 f"Some custom fields in {name} don't exist or were specified twice.",
             )
+
+        if isinstance(custom_fields, dict):
+            custom_field_map = CustomField.objects.in_bulk(ids)
+            for raw_field_id, value in custom_fields.items():
+                field = custom_field_map.get(int(raw_field_id))
+                if (
+                    field is not None
+                    and field.data_type == CustomField.FieldDataType.DOCUMENTLINK
+                    and value is not None
+                ):
+                    if not isinstance(value, list):
+                        raise serializers.ValidationError("Value must be a list")
+                    validate_documentlink_targets(self.user, value)
 
     def validate_method(self, method):
         if method == "set_correspondent":
@@ -2147,6 +2211,17 @@ class ShareLinkSerializer(OwnedObjectSerializer):
         validated_data["slug"] = get_random_string(50)
         return super().create(validated_data)
 
+    def validate_document(self, document):
+        if self.user is not None and has_perms_owner_aware(
+            self.user,
+            "view_document",
+            document,
+        ):
+            return document
+        raise PermissionDenied(
+            _("Insufficient permissions."),
+        )
+
 
 class BulkEditObjectsSerializer(SerializerWithPerms, SetPermissionsMixin):
     objects = serializers.ListField(
@@ -2553,7 +2628,8 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 set_triggers.append(trigger_instance)
 
         if actions is not None and actions is not serializers.empty:
-            for action in actions:
+            for index, action in enumerate(actions):
+                action["order"] = index
                 assign_tags = action.pop("assign_tags", None)
                 assign_view_users = action.pop("assign_view_users", None)
                 assign_view_groups = action.pop("assign_view_groups", None)
@@ -2680,6 +2756,16 @@ class WorkflowSerializer(serializers.ModelSerializer):
 
         return instance
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        actions = instance.actions.order_by("order", "pk")
+        data["actions"] = WorkflowActionSerializer(
+            actions,
+            many=True,
+            context=self.context,
+        ).data
+        return data
+
 
 class TrashSerializer(SerializerWithPerms):
     documents = serializers.ListField(
@@ -2712,8 +2798,22 @@ class StoragePathTestSerializer(SerializerWithPerms):
     )
 
     document = serializers.PrimaryKeyRelatedField(
-        queryset=Document.objects.all(),
+        queryset=Document.objects.none(),
         required=True,
         label="Document",
         write_only=True,
     )
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        if user is not None and user.is_authenticated:
+            document_field = self.fields.get("document")
+            if not isinstance(document_field, serializers.PrimaryKeyRelatedField):
+                return
+            document_field.queryset = get_objects_for_user_owner_aware(
+                user,
+                "documents.view_document",
+                Document,
+            )

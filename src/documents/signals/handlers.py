@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 from pathlib import Path
@@ -391,6 +392,14 @@ class CannotMoveFilesException(Exception):
     pass
 
 
+def _path_matches_checksum(path: Path, checksum: str | None) -> bool:
+    if checksum is None or not path.is_file():
+        return False
+
+    with path.open("rb") as f:
+        return hashlib.md5(f.read()).hexdigest() == checksum
+
+
 def _filename_template_uses_custom_fields(doc: Document) -> bool:
     template = None
     if doc.storage_path is not None:
@@ -418,7 +427,15 @@ def update_filename_and_move_files(
             return
         instance = instance.document
 
-    def validate_move(instance, old_path: Path, new_path: Path):
+    def validate_move(instance, old_path: Path, new_path: Path, root: Path):
+        if not new_path.is_relative_to(root):
+            msg = (
+                f"Document {instance!s}: Refusing to move file outside root {root}: "
+                f"{new_path}."
+            )
+            logger.warning(msg)
+            raise CannotMoveFilesException(msg)
+
         if not old_path.is_file():
             # Can't do anything if the old file does not exist anymore.
             msg = f"Document {instance!s}: File {old_path} doesn't exist."
@@ -452,8 +469,24 @@ def update_filename_and_move_files(
 
             old_filename = instance.filename
             old_source_path = instance.source_path
+            move_original = False
+            original_already_moved = False
+
+            old_archive_filename = instance.archive_filename
+            old_archive_path = instance.archive_path
+            move_archive = False
+            archive_already_moved = False
 
             candidate_filename = generate_filename(instance)
+            if len(str(candidate_filename)) > Document.MAX_STORED_FILENAME_LENGTH:
+                msg = (
+                    f"Document {instance!s}: Generated filename exceeds db path "
+                    f"limit ({len(str(candidate_filename))} > "
+                    f"{Document.MAX_STORED_FILENAME_LENGTH}): {candidate_filename!s}"
+                )
+                logger.warning(msg)
+                raise CannotMoveFilesException(msg)
+
             candidate_source_path = (
                 settings.ORIGINALS_DIR / candidate_filename
             ).resolve()
@@ -463,20 +496,34 @@ def update_filename_and_move_files(
                 candidate_source_path.exists()
                 and candidate_source_path != old_source_path
             ):
-                # Only fall back to unique search when there is an actual conflict
-                new_filename = generate_unique_filename(instance)
+                if not old_source_path.is_file() and _path_matches_checksum(
+                    candidate_source_path,
+                    instance.checksum,
+                ):
+                    new_filename = candidate_filename
+                    original_already_moved = True
+                else:
+                    # Only fall back to unique search when there is an actual conflict
+                    new_filename = generate_unique_filename(instance)
             else:
                 new_filename = candidate_filename
 
             # Need to convert to string to be able to save it to the db
             instance.filename = str(new_filename)
-            move_original = old_filename != instance.filename
-
-            old_archive_filename = instance.archive_filename
-            old_archive_path = instance.archive_path
+            move_original = (
+                old_filename != instance.filename and not original_already_moved
+            )
 
             if instance.has_archive_version:
                 archive_candidate = generate_filename(instance, archive_filename=True)
+                if len(str(archive_candidate)) > Document.MAX_STORED_FILENAME_LENGTH:
+                    msg = (
+                        f"Document {instance!s}: Generated archive filename exceeds "
+                        f"db path limit ({len(str(archive_candidate))} > "
+                        f"{Document.MAX_STORED_FILENAME_LENGTH}): {archive_candidate!s}"
+                    )
+                    logger.warning(msg)
+                    raise CannotMoveFilesException(msg)
                 archive_candidate_path = (
                     settings.ARCHIVE_DIR / archive_candidate
                 ).resolve()
@@ -486,33 +533,57 @@ def update_filename_and_move_files(
                     archive_candidate_path.exists()
                     and archive_candidate_path != old_archive_path
                 ):
-                    new_archive_filename = generate_unique_filename(
-                        instance,
-                        archive_filename=True,
-                    )
+                    if not old_archive_path.is_file() and _path_matches_checksum(
+                        archive_candidate_path,
+                        instance.archive_checksum,
+                    ):
+                        new_archive_filename = archive_candidate
+                        archive_already_moved = True
+                    else:
+                        new_archive_filename = generate_unique_filename(
+                            instance,
+                            archive_filename=True,
+                        )
                 else:
                     new_archive_filename = archive_candidate
 
                 instance.archive_filename = str(new_archive_filename)
 
-                move_archive = old_archive_filename != instance.archive_filename
+                move_archive = (
+                    old_archive_filename != instance.archive_filename
+                    and not archive_already_moved
+                )
             else:
                 move_archive = False
 
             if not move_original and not move_archive:
-                # Just update modified. Also, don't save() here to prevent infinite recursion.
-                Document.objects.filter(pk=instance.pk).update(
-                    modified=timezone.now(),
-                )
+                updates = {"modified": timezone.now()}
+                if old_filename != instance.filename:
+                    updates["filename"] = instance.filename
+                if old_archive_filename != instance.archive_filename:
+                    updates["archive_filename"] = instance.archive_filename
+
+                # Don't save() here to prevent infinite recursion.
+                Document.objects.filter(pk=instance.pk).update(**updates)
                 return
 
             if move_original:
-                validate_move(instance, old_source_path, instance.source_path)
+                validate_move(
+                    instance,
+                    old_source_path,
+                    instance.source_path,
+                    settings.ORIGINALS_DIR,
+                )
                 create_source_path_directory(instance.source_path)
                 shutil.move(old_source_path, instance.source_path)
 
             if move_archive:
-                validate_move(instance, old_archive_path, instance.archive_path)
+                validate_move(
+                    instance,
+                    old_archive_path,
+                    instance.archive_path,
+                    settings.ARCHIVE_DIR,
+                )
                 create_source_path_directory(instance.archive_path)
                 shutil.move(old_archive_path, instance.archive_path)
 
@@ -751,7 +822,7 @@ def run_workflows(
 
         if matching.document_matches_workflow(document, workflow, trigger_type):
             action: WorkflowAction
-            for action in workflow.actions.all():
+            for action in workflow.actions.order_by("order", "pk"):
                 message = f"Applying {action} from {workflow}"
                 if not use_overrides:
                     logger.info(message, extra={"group": logging_group})
@@ -796,8 +867,25 @@ def run_workflows(
             if not use_overrides:
                 # limit title to 128 characters
                 document.title = document.title[:128]
-                # save first before setting tags
-                document.save()
+                # Save only the fields that workflow actions can set directly.
+                # Deliberately excludes filename and archive_filename — those are
+                # managed exclusively by update_filename_and_move_files via the
+                # post_save signal. Writing stale in-memory values here would revert
+                # a concurrent update_filename_and_move_files DB write, leaving the
+                # DB pointing at the old path while the file is already at the new
+                # one (see: https://github.com/paperless-ngx/paperless-ngx/issues/12386).
+                # modified has auto_now=True but is not auto-added when update_fields
+                # is specified, so it must be listed explicitly.
+                document.save(
+                    update_fields=[
+                        "title",
+                        "correspondent",
+                        "document_type",
+                        "storage_path",
+                        "owner",
+                        "modified",
+                    ],
+                )
                 document.tags.set(doc_tag_ids)
 
             WorkflowRun.objects.create(

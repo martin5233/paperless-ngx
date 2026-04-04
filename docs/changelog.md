@@ -1,8 +1,208 @@
 # Changelog
 
+## paperless-ngx 2.20.13
+
+### Bug Fixes
+
+-   Fix: suggest corrections only if visible results
+-   Fix: require view permission for more-like search
+-   Fix: validate document link targets
+-   Fix: enforce permissions when attaching accounts to mail rules
+
+## paperless-ngx 2.20.12
+
+### Security
+
+-   Resolve [GHSA-96jx-fj7m-qh6x](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-96jx-fj7m-qh6x)
+
+### Bug Fixes
+
+-   Fix: Scope the workflow saves to prevent clobbering filename/archive_filename [@stumpylog](https://github.com/stumpylog) ([#12390](https://github.com/paperless-ngx/paperless-ngx/pull/12390))
+-   Fix: don't try to usermod/groupmod when non-root + update docs (#<!---->12365) [@stumpylog](https://github.com/stumpylog) ([#12391](https://github.com/paperless-ngx/paperless-ngx/pull/12391))
+-   Fix: avoid moving files if already moved [@shamoon](https://github.com/shamoon) ([#12389](https://github.com/paperless-ngx/paperless-ngx/pull/12389))
+-   Fix: remove pagination from document notes api spec [@shamoon](https://github.com/shamoon) ([#12388](https://github.com/paperless-ngx/paperless-ngx/pull/12388))
+-   Fix: fix file button hover color in dark mode [@shamoon](https://github.com/shamoon) ([#12367](https://github.com/paperless-ngx/paperless-ngx/pull/12367))
+-   Fixhancement: only offer basic auth for appropriate requests [@shamoon](https://github.com/shamoon) ([#12362](https://github.com/paperless-ngx/paperless-ngx/pull/12362))
+
+### All App Changes
+
+<details>
+<summary>5 changes</summary>
+
+-   Fix: Scope the workflow saves to prevent clobbering filename/archive_filename [@stumpylog](https://github.com/stumpylog) ([#12390](https://github.com/paperless-ngx/paperless-ngx/pull/12390))
+-   Fix: avoid moving files if already moved [@shamoon](https://github.com/shamoon) ([#12389](https://github.com/paperless-ngx/paperless-ngx/pull/12389))
+-   Fix: remove pagination from document notes api spec [@shamoon](https://github.com/shamoon) ([#12388](https://github.com/paperless-ngx/paperless-ngx/pull/12388))
+-   Fix: fix file button hover color in dark mode [@shamoon](https://github.com/shamoon) ([#12367](https://github.com/paperless-ngx/paperless-ngx/pull/12367))
+-   Fixhancement: only offer basic auth for appropriate requests [@shamoon](https://github.com/shamoon) ([#12362](https://github.com/paperless-ngx/paperless-ngx/pull/12362))
+</details>
+
+## paperless-ngx 2.20.11
+
+### Security
+
+-   Resolve [GHSA-59xh-5vwx-4c4q](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-59xh-5vwx-4c4q)
+
+### Bug Fixes
+
+-   Fix: correct dropdown list active color in dark mode [@shamoon](https://github.com/shamoon) ([#12328](https://github.com/paperless-ngx/paperless-ngx/pull/12328))
+-   Fixhancement: clear descendant selections in dropdown when parent toggled [@shamoon](https://github.com/shamoon) ([#12326](https://github.com/paperless-ngx/paperless-ngx/pull/12326))
+-   Fix: prevent wrapping with larger amounts of tags on small cards, reset moreTags setting to correct count [@shamoon](https://github.com/shamoon) ([#12302](https://github.com/paperless-ngx/paperless-ngx/pull/12302))
+-   Fix: prevent stale db filename during workflow actions [@shamoon](https://github.com/shamoon) ([#12289](https://github.com/paperless-ngx/paperless-ngx/pull/12289))
+
+### All App Changes
+
+<details>
+<summary>4 changes</summary>
+
+-   Fix: correct dropdown list active color in dark mode [@shamoon](https://github.com/shamoon) ([#12328](https://github.com/paperless-ngx/paperless-ngx/pull/12328))
+-   Fixhancement: clear descendant selections in dropdown when parent toggled [@shamoon](https://github.com/shamoon) ([#12326](https://github.com/paperless-ngx/paperless-ngx/pull/12326))
+-   Fix: prevent wrapping with larger amounts of tags on small cards, reset moreTags setting to correct count [@shamoon](https://github.com/shamoon) ([#12302](https://github.com/paperless-ngx/paperless-ngx/pull/12302))
+-   Fix: prevent stale db filename during workflow actions [@shamoon](https://github.com/shamoon) ([#12289](https://github.com/paperless-ngx/paperless-ngx/pull/12289))
+</details>
+
+## paperless-ngx 2.20.10
+
+### Bug Fixes
+
+-   Fix: support string coercion in filepath jinja templates [@shamoon](https://github.com/shamoon) ([#12244](https://github.com/paperless-ngx/paperless-ngx/pull/12244))
+-   Fix: apply ordering after annotating tag document count [@shamoon](https://github.com/shamoon) ([#12238](https://github.com/paperless-ngx/paperless-ngx/pull/12238))
+-   Fix: enforce path limit for db filename fields [@shamoon](https://github.com/shamoon) ([#12235](https://github.com/paperless-ngx/paperless-ngx/pull/12235))
+
+### All App Changes
+
+<details>
+<summary>3 changes</summary>
+
+-   Fix: support string coercion in filepath jinja templates [@shamoon](https://github.com/shamoon) ([#12244](https://github.com/paperless-ngx/paperless-ngx/pull/12244))
+-   Fix: apply ordering after annotating tag document count [@shamoon](https://github.com/shamoon) ([#12238](https://github.com/paperless-ngx/paperless-ngx/pull/12238))
+-   Fix: enforce path limit for db filename fields [@shamoon](https://github.com/shamoon) ([#12235](https://github.com/paperless-ngx/paperless-ngx/pull/12235))
+</details>
+
+## paperless-ngx 2.20.9
+
+### Security
+
+-   Resolve [GHSA-386h-chg4-cfw9](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-386h-chg4-cfw9)
+
+### Bug Fixes
+
+-   Fixhancement: config option reset [@shamoon](https://github.com/shamoon) ([#12176](https://github.com/paperless-ngx/paperless-ngx/pull/12176))
+-   Fix: correct page count by separating display vs collection sizes for tags [@shamoon](https://github.com/shamoon) ([#12170](https://github.com/paperless-ngx/paperless-ngx/pull/12170))
+
+### All App Changes
+
+<details>
+<summary>2 changes</summary>
+
+-   Fixhancement: config option reset [@shamoon](https://github.com/shamoon) ([#12176](https://github.com/paperless-ngx/paperless-ngx/pull/12176))
+-   Fix: correct page count by separating display vs collection sizes for tags [@shamoon](https://github.com/shamoon) ([#12170](https://github.com/paperless-ngx/paperless-ngx/pull/12170))
+</details>
+
+## paperless-ngx 2.20.8
+
+### Security
+
+-   Resolve [GHSA-7qqc-wrcw-2fj9](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-7qqc-wrcw-2fj9)
+
+## paperless-ngx 2.20.7
+
+### Security
+
+-   Resolve [GHSA-x395-6h48-wr8v](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-x395-6h48-wr8v)
+
+### Bug Fixes
+
+-   Performance fix: use subqueries to improve object retrieval in large installs [@shamoon](https://github.com/shamoon) ([#11950](https://github.com/paperless-ngx/paperless-ngx/pull/11950))
+-   Fix: correct user dropdown button icon styling [@shamoon](https://github.com/shamoon) ([#12092](https://github.com/paperless-ngx/paperless-ngx/issues/12092))
+-   Fix: fix broken docker create_classifier command in 2.20.6 [@shamoon](https://github.com/shamoon) ([#11965](https://github.com/paperless-ngx/paperless-ngx/issues/11965))
+
+### All App Changes
+
+<details>
+<summary>3 changes</summary>
+
+-   Performance fix: use subqueries to improve object retrieval in large installs [@shamoon](https://github.com/shamoon) ([#11950](https://github.com/paperless-ngx/paperless-ngx/pull/11950))
+-   Fix: correct user dropdown button icon styling [@shamoon](https://github.com/shamoon) ([#12092](https://github.com/paperless-ngx/paperless-ngx/issues/12092))
+-   Fix: fix broken docker create_classifier command in 2.20.6 [@shamoon](https://github.com/shamoon) ([#11965](https://github.com/paperless-ngx/paperless-ngx/issues/11965))
+</details>
+
+## paperless-ngx 2.20.6
+
+### Security
+
+-   Resolve [GHSA-jqwv-hx7q-fxh3](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-jqwv-hx7q-fxh3) and [GHSA-w47q-3m69-84v8](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-w47q-3m69-84v8)
+
+### Bug Fixes
+
+-   Fix: extract all ids for nested tags [@shamoon](https://github.com/shamoon) ([#11888](https://github.com/paperless-ngx/paperless-ngx/pull/11888))
+-   Fixhancement: change date calculation for 'this year' to include future documents [@shamoon](https://github.com/shamoon) ([#11884](https://github.com/paperless-ngx/paperless-ngx/pull/11884))
+-   Fix: Running management scripts under rootless could fail [@stumpylog](https://github.com/stumpylog) ([#11870](https://github.com/paperless-ngx/paperless-ngx/pull/11870))
+-   Fix: use correct field id for overrides [@shamoon](https://github.com/shamoon) ([#11869](https://github.com/paperless-ngx/paperless-ngx/pull/11869))
+
+### All App Changes
+
+<details>
+<summary>3 changes</summary>
+
+-   Fix: extract all ids for nested tags [@shamoon](https://github.com/shamoon) ([#11888](https://github.com/paperless-ngx/paperless-ngx/pull/11888))
+-   Fixhancement: change date calculation for 'this year' to include future documents [@shamoon](https://github.com/shamoon) ([#11884](https://github.com/paperless-ngx/paperless-ngx/pull/11884))
+-   Fix: use correct field id for overrides [@shamoon](https://github.com/shamoon) ([#11869](https://github.com/paperless-ngx/paperless-ngx/pull/11869))
+</details>
+
+## paperless-ngx 2.20.5
+
+### Bug Fixes
+
+-   Fix: ensure horizontal scroll for long tag names in list, wrap tags without parent [@shamoon](https://github.com/shamoon) ([#11811](https://github.com/paperless-ngx/paperless-ngx/pull/11811))
+-   Fix: use explicit order field for workflow actions [@shamoon](https://github.com/shamoon) [@stumpylog](https://github.com/stumpylog) ([#11781](https://github.com/paperless-ngx/paperless-ngx/pull/11781))
+
+### All App Changes
+
+<details>
+<summary>2 changes</summary>
+
+-   Fix: ensure horizontal scroll for long tag names in list, wrap tags without parent [@shamoon](https://github.com/shamoon) ([#11811](https://github.com/paperless-ngx/paperless-ngx/pull/11811))
+-   Fix: use explicit order field for workflow actions [@shamoon](https://github.com/shamoon) [@stumpylog](https://github.com/stumpylog) ([#11781](https://github.com/paperless-ngx/paperless-ngx/pull/11781))
+</details>
+
+## paperless-ngx 2.20.4
+
+### Security
+
+-   Resolve [GHSA-28cf-xvcf-hw6m](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-28cf-xvcf-hw6m)
+
+### Bug Fixes
+
+-   Fix: propagate metadata override created value [@shamoon](https://github.com/shamoon) ([#11659](https://github.com/paperless-ngx/paperless-ngx/pull/11659))
+-   Fix: support ordering by storage path name [@shamoon](https://github.com/shamoon) ([#11661](https://github.com/paperless-ngx/paperless-ngx/pull/11661))
+-   Fix: validate cf integer values within PostgreSQL range [@shamoon](https://github.com/shamoon) ([#11666](https://github.com/paperless-ngx/paperless-ngx/pull/11666))
+-   Fixhancement: add error handling and retry when opening index [@shamoon](https://github.com/shamoon) ([#11731](https://github.com/paperless-ngx/paperless-ngx/pull/11731))
+-   Fix: fix recurring workflow to respect latest run time [@shamoon](https://github.com/shamoon) ([#11735](https://github.com/paperless-ngx/paperless-ngx/pull/11735))
+
+### All App Changes
+
+<details>
+<summary>5 changes</summary>
+
+-   Fix: propagate metadata override created value [@shamoon](https://github.com/shamoon) ([#11659](https://github.com/paperless-ngx/paperless-ngx/pull/11659))
+-   Fix: support ordering by storage path name [@shamoon](https://github.com/shamoon) ([#11661](https://github.com/paperless-ngx/paperless-ngx/pull/11661))
+-   Fix: validate cf integer values within PostgreSQL range [@shamoon](https://github.com/shamoon) ([#11666](https://github.com/paperless-ngx/paperless-ngx/pull/11666))
+-   Fixhancement: add error handling and retry when opening index [@shamoon](https://github.com/shamoon) ([#11731](https://github.com/paperless-ngx/paperless-ngx/pull/11731))
+-   Fix: fix recurring workflow to respect latest run time [@shamoon](https://github.com/shamoon) ([#11735](https://github.com/paperless-ngx/paperless-ngx/pull/11735))
+</details>
+
 ## paperless-ngx 2.20.3
 
+### Security
+
+-   Resolve [GHSA-7cq3-mhxq-w946](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-7cq3-mhxq-w946)
+
 ## paperless-ngx 2.20.2
+
+### Security
+
+-   Resolve [GHSA-6653-vcx4-69mc](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-6653-vcx4-69mc)
+-   Resolve [GHSA-24x5-wp64-9fcc](https://github.com/paperless-ngx/paperless-ngx/security/advisories/GHSA-24x5-wp64-9fcc)
 
 ### Features / Enhancements
 
